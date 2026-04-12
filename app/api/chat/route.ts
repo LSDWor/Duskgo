@@ -148,87 +148,57 @@ function normalizeHotel(h: any): Hotel {
 
 type Flight = {
   id: string;
+  offerId?: string;
   price?: number;
   currency?: string;
   airline?: string;
   airlineCode?: string;
+  airlineLogo?: string;
   origin?: string;
+  originName?: string;
   destination?: string;
+  destinationName?: string;
   departureTime?: string;
   arrivalTime?: string;
-  duration?: string;
+  durationMinutes?: number;
   stops?: number;
   cabin?: string;
-  raw?: any;
+  seatsRemaining?: number;
+  refundable?: boolean;
+  changeable?: boolean;
+  hasCarryOn?: boolean;
+  hasCheckedBag?: boolean;
 };
 
-function normalizeFlight(f: any, idx: number): Flight {
-  // LiteAPI flight offers have a few possible shapes. Extract defensively.
-  const id =
-    f.id ?? f.offerId ?? f.offer_id ?? f.uniqueId ?? `flight-${idx}`;
-  const price =
-    f.price?.total ??
-    f.totalPrice ??
-    f.total ??
-    f.pricing?.total ??
-    f.price ??
-    undefined;
-  const currency =
-    f.price?.currency ??
-    f.currency ??
-    f.pricing?.currency ??
-    undefined;
-
-  const firstSegment =
-    f.itineraries?.[0]?.segments?.[0] ??
-    f.segments?.[0] ??
-    f.slices?.[0]?.segments?.[0] ??
-    {};
-
-  const lastSegment =
-    f.itineraries?.[0]?.segments?.slice(-1)?.[0] ??
-    f.segments?.slice(-1)?.[0] ??
-    f.slices?.[0]?.segments?.slice(-1)?.[0] ??
-    firstSegment;
-
-  const stopsCount =
-    (f.itineraries?.[0]?.segments?.length ?? f.segments?.length ?? 1) - 1;
+function normalizeJourney(journey: any): Flight {
+  const segments: any[] = journey.segments || [];
+  const first = segments[0] || {};
+  const last = segments[segments.length - 1] || first;
+  const offer = journey.cheapestOffer || journey.offers?.[0];
+  const pricing = offer?.pricing?.display;
 
   return {
-    id: String(id),
-    price: typeof price === "number" ? price : undefined,
-    currency,
-    airline:
-      firstSegment.carrierName ??
-      firstSegment.airline?.name ??
-      firstSegment.operating?.carrierName ??
-      undefined,
-    airlineCode:
-      firstSegment.carrierCode ??
-      firstSegment.airline?.iata ??
-      firstSegment.operating?.carrierCode ??
-      undefined,
-    origin:
-      firstSegment.departure?.iataCode ??
-      firstSegment.origin ??
-      firstSegment.from ??
-      undefined,
-    destination:
-      lastSegment.arrival?.iataCode ??
-      lastSegment.destination ??
-      lastSegment.to ??
-      undefined,
-    departureTime:
-      firstSegment.departure?.at ??
-      firstSegment.departureTime ??
-      undefined,
-    arrivalTime:
-      lastSegment.arrival?.at ??
-      lastSegment.arrivalTime ??
-      undefined,
-    duration: f.duration ?? f.totalDuration ?? undefined,
-    stops: Number.isFinite(stopsCount) ? Math.max(0, stopsCount) : undefined,
-    cabin: f.cabinClass ?? firstSegment.cabin ?? undefined,
+    id: journey.journeyKey || crypto.randomUUID(),
+    offerId: offer?.offerId,
+    price: pricing?.total,
+    currency: pricing?.currency,
+    airline: first.carrier?.marketingName,
+    airlineCode: first.carrier?.marketingCode,
+    airlineLogo: first.carrier?.marketingLogo,
+    origin: first.originCode,
+    originName: first.originName,
+    destination: last.destinationCode,
+    destinationName: last.destinationName,
+    departureTime: first.departureTime,
+    arrivalTime: last.arrivalTime,
+    durationMinutes: journey.totalDuration?.minutes,
+    stops: Math.max(0, segments.length - 1),
+    cabin: offer?.fare?.family || offer?.segmentFares?.[0]?.cabin,
+    seatsRemaining: offer?.fare?.seatsRemaining,
+    refundable: offer?.terms?.refundable,
+    changeable: offer?.terms?.changeable,
+    hasCarryOn: offer?.baggage?.hasCarryOnBag,
+    hasCheckedBag: offer?.baggage?.hasCheckedBag,
   };
 }
 
@@ -316,23 +286,59 @@ const TOOLS = {
   },
 
   async search_flights(args: any) {
-    const payload: any = {
-      origin: String(args.origin || "").toUpperCase(),
-      destination: String(args.destination || "").toUpperCase(),
-      departureDate: args.departureDate,
-      adults: Number.isFinite(args.adults) ? Number(args.adults) : 1,
-      currency: args.currency || "USD",
-    };
-    if (args.returnDate) payload.returnDate = args.returnDate;
-    if (args.cabinClass) payload.cabinClass = args.cabinClass;
+    const apiKey = process.env.LITEAPI_KEY;
+    if (!apiKey) throw new Error("LITEAPI_KEY not set");
 
-    const res = await mcpCall("post_flights_rates", payload);
-    const offers: any[] =
-      res?.data?.offers ??
-      res?.offers ??
-      res?.data ??
-      (Array.isArray(res) ? res : []);
-    return offers.slice(0, 15).map((f, i) => normalizeFlight(f, i));
+    const origin = String(args.origin || "").toUpperCase();
+    const destination = String(args.destination || "").toUpperCase();
+    const departureDate = args.departureDate;
+    const returnDate = args.returnDate;
+    const adults = Number.isFinite(args.adults) ? Number(args.adults) : 1;
+    const currency = args.currency || "USD";
+    const cabinClass = args.cabinClass || "Economy";
+
+    const legs: any[] = [
+      { origin, destination, date: departureDate, direction: "OUTBOUND" },
+    ];
+    if (returnDate) {
+      legs.push({
+        origin: destination,
+        destination: origin,
+        date: returnDate,
+        direction: "INBOUND",
+      });
+    }
+
+    const res = await fetch("https://api.liteapi.travel/v3.0/flights/rates", {
+      method: "POST",
+      headers: {
+        "X-API-Key": apiKey,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        legs,
+        adults,
+        children: 0,
+        infants: 0,
+        currency,
+        cabinClass,
+        sort: { sortBy: "price", sortOrder: "asc" },
+      }),
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      const errMatch = text.match(/"description"\s*:\s*"([^"]+)"/);
+      throw new Error(
+        errMatch?.[1] || `Flights API ${res.status}: ${text.slice(0, 200)}`
+      );
+    }
+
+    const json = await res.json();
+    const batches: any[] = json?.data || [];
+    const journeys: any[] = batches.flatMap((b: any) => b?.journeys || []);
+    return journeys.slice(0, 15).map(normalizeJourney);
   },
 };
 

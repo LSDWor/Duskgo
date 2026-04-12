@@ -23,17 +23,26 @@ type Hotel = {
 
 type Flight = {
   id: string;
+  offerId?: string;
   price?: number;
   currency?: string;
   airline?: string;
   airlineCode?: string;
+  airlineLogo?: string;
   origin?: string;
+  originName?: string;
   destination?: string;
+  destinationName?: string;
   departureTime?: string;
   arrivalTime?: string;
-  duration?: string;
+  durationMinutes?: number;
   stops?: number;
   cabin?: string;
+  seatsRemaining?: number;
+  refundable?: boolean;
+  changeable?: boolean;
+  hasCarryOn?: boolean;
+  hasCheckedBag?: boolean;
 };
 
 type CompareRow = {
@@ -749,6 +758,13 @@ function HotelCard({
   );
 }
 
+function formatDuration(min?: number) {
+  if (!min) return "";
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
 function FlightCard({
   f,
   onAdd,
@@ -760,49 +776,118 @@ function FlightCard({
 }) {
   return (
     <article className="rounded-xl border bg-card p-4 transition hover:shadow-md">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Plane className="text-muted-foreground" />
-            {f.airline || f.airlineCode || "Flight"}
+      <div className="flex items-start gap-4">
+        {/* Left — airline + route */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            {f.airlineLogo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={f.airlineLogo}
+                alt={f.airline || f.airlineCode || ""}
+                className="h-5 w-5 shrink-0 rounded"
+              />
+            ) : (
+              <Plane className="shrink-0 text-muted-foreground" />
+            )}
+            <span className="truncate text-sm font-medium">
+              {f.airline || f.airlineCode || "Flight"}
+            </span>
             {f.stops != null && (
-              <span className="text-xs font-normal text-muted-foreground">
-                · {f.stops === 0 ? "Nonstop" : `${f.stops} stop${f.stops > 1 ? "s" : ""}`}
+              <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium">
+                {f.stops === 0
+                  ? "Nonstop"
+                  : `${f.stops} stop${f.stops > 1 ? "s" : ""}`}
               </span>
             )}
           </div>
-          <div className="mt-2 flex items-center gap-3 text-sm">
-            <div>
-              <div className="font-semibold">{formatTime(f.departureTime)}</div>
-              <div className="text-xs text-muted-foreground">{f.origin || "—"}</div>
+
+          <div className="mt-3 flex items-center gap-2">
+            <div className="text-center">
+              <div className="text-base font-bold tabular-nums leading-tight">
+                {formatTime(f.departureTime)}
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {f.origin || "—"}
+              </div>
             </div>
-            <div className="flex-1 border-t border-dashed" />
-            <div>
-              <div className="font-semibold">{formatTime(f.arrivalTime)}</div>
-              <div className="text-xs text-muted-foreground">{f.destination || "—"}</div>
+            <div className="flex flex-1 flex-col items-center gap-0.5">
+              {f.durationMinutes ? (
+                <span className="text-[10px] text-muted-foreground">
+                  {formatDuration(f.durationMinutes)}
+                </span>
+              ) : null}
+              <div className="flex w-full items-center gap-0.5">
+                <div className="h-px flex-1 bg-border" />
+                <Plane className="shrink-0 text-muted-foreground" />
+                <div className="h-px flex-1 bg-border" />
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-base font-bold tabular-nums leading-tight">
+                {formatTime(f.arrivalTime)}
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {f.destination || "—"}
+              </div>
             </div>
           </div>
-          {f.cabin && (
-            <div className="mt-2 text-xs text-muted-foreground">{f.cabin}</div>
-          )}
+
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {f.cabin && (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                {f.cabin}
+              </span>
+            )}
+            {f.hasCarryOn && (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                Carry-on
+              </span>
+            )}
+            {f.hasCheckedBag && (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                Checked bag
+              </span>
+            )}
+            {f.refundable != null &&
+              (f.refundable ? (
+                <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[10px] font-medium text-green-600 dark:text-green-400">
+                  Refundable
+                </span>
+              ) : (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                  Non-refundable
+                </span>
+              ))}
+            {typeof f.seatsRemaining === "number" && f.seatsRemaining <= 5 && (
+              <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                {f.seatsRemaining} left
+              </span>
+            )}
+          </div>
         </div>
-        <div className="text-right">
-          <div className="text-lg font-semibold">
-            {formatPrice(f.price, f.currency)}
+
+        {/* Right — price + add */}
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="text-right">
+            <div className="text-xl font-bold tabular-nums">
+              {formatPrice(f.price, f.currency)}
+            </div>
+            <div className="text-[10px] text-muted-foreground">total</div>
           </div>
           <button
             type="button"
             onClick={onAdd}
             disabled={inCart}
-            className="mt-2 flex items-center gap-1 rounded-full border bg-background px-2.5 py-1 text-xs transition hover:bg-muted disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
           >
             {inCart ? (
               <>
-                <Check className="text-green-500" /> In cart
+                <Check /> In cart
               </>
             ) : (
               <>
-                <Plus /> Add
+                <Plus /> Add to cart
               </>
             )}
           </button>
@@ -820,9 +905,8 @@ function weatherIcon(cloud?: number, precip?: number) {
   return "☀️";
 }
 
-function WeatherStrip({ days, units }: { days: WeatherDay[]; units?: string }) {
+function WeatherStrip({ days }: { days: WeatherDay[] }) {
   if (days.length === 0) return null;
-  const u = (units || days[0]?.units || "metric") === "metric" ? "°C" : "°F";
   const fmtDay = (iso: string) => {
     try {
       return new Intl.DateTimeFormat("en-US", {
@@ -836,41 +920,60 @@ function WeatherStrip({ days, units }: { days: WeatherDay[]; units?: string }) {
   };
 
   return (
-    <section className="mt-8 animate-fade-in-up">
-      <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        Weather during your stay
-      </h2>
-      <div className="no-scrollbar flex gap-3 overflow-x-auto pb-1">
-        {days.map((d, i) => (
-          <div
-            key={d.date}
-            className="animate-fade-in-up flex w-28 shrink-0 flex-col items-center rounded-xl border bg-card p-3 text-center"
-            style={{ animationDelay: `${i * 60}ms` }}
-          >
-            <div className="text-[10px] font-medium text-muted-foreground">
-              {fmtDay(d.date)}
-            </div>
-            <div className="my-2 text-2xl leading-none">
-              {weatherIcon(d.cloudCover, d.precipitation)}
-            </div>
-            <div className="text-sm font-semibold tabular-nums">
-              {typeof d.tempMax === "number" ? Math.round(d.tempMax) : "—"}
-              {u}
-            </div>
-            <div className="text-[11px] text-muted-foreground tabular-nums">
-              {typeof d.tempMin === "number" ? Math.round(d.tempMin) : "—"}
-              {u}
-            </div>
-            <div className="mt-1.5 flex flex-col gap-0.5 text-[10px] text-muted-foreground">
-              {typeof d.humidity === "number" && (
-                <span>💧 {Math.round(d.humidity)}%</span>
+    <section className="animate-fade-in-up -mx-4 mt-8 md:-mx-0">
+      <div className="px-4 md:px-0">
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Weather during your stay
+        </h2>
+      </div>
+      <div className="no-scrollbar flex gap-3 overflow-x-auto px-4 pb-2 md:px-0">
+        {days.map((d, i) => {
+          const icon = weatherIcon(d.cloudCover, d.precipitation);
+          return (
+            <div
+              key={d.date}
+              className="animate-fade-in-up flex w-36 shrink-0 flex-col rounded-2xl border bg-card p-4"
+              style={{ animationDelay: `${i * 60}ms` }}
+            >
+              <div className="text-[11px] font-medium text-muted-foreground">
+                {fmtDay(d.date)}
+              </div>
+              <div className="mt-3 flex items-end justify-between">
+                <span className="text-3xl leading-none">{icon}</span>
+                <div className="text-right">
+                  <div className="text-lg font-bold tabular-nums leading-tight">
+                    {typeof d.tempMax === "number"
+                      ? `${Math.round(d.tempMax)}°F`
+                      : "—"}
+                  </div>
+                  <div className="text-xs text-muted-foreground tabular-nums">
+                    {typeof d.tempMin === "number"
+                      ? `${Math.round(d.tempMin)}°F`
+                      : "—"}{" "}
+                    low
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-3 text-[11px] text-muted-foreground">
+                {typeof d.humidity === "number" && (
+                  <span className="flex items-center gap-1">
+                    💧 {Math.round(d.humidity)}%
+                  </span>
+                )}
+                {typeof d.windSpeed === "number" && (
+                  <span className="flex items-center gap-1">
+                    💨 {d.windSpeed.toFixed(0)} mph
+                  </span>
+                )}
+              </div>
+              {typeof d.precipitation === "number" && d.precipitation > 0 && (
+                <div className="mt-1 text-[10px] text-blue-500">
+                  {d.precipitation.toFixed(1)}″ precip
+                </div>
               )}
-              {typeof d.windSpeed === "number" && (
-                <span>💨 {d.windSpeed.toFixed(1)} m/s</span>
-              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );

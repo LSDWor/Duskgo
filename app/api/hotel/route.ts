@@ -200,7 +200,7 @@ export async function GET(req: Request) {
       weatherUrl.searchParams.set("longitude", String(lng));
       weatherUrl.searchParams.set("startDate", checkin);
       weatherUrl.searchParams.set("endDate", checkout);
-      weatherUrl.searchParams.set("units", "metric");
+      weatherUrl.searchParams.set("units", "imperial");
       weatherRes = await Promise.allSettled([
         fetch(weatherUrl.toString(), {
           headers: { "X-API-Key": apiKey!, accept: "application/json" },
