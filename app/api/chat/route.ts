@@ -5,6 +5,17 @@ export const maxDuration = 60;
 
 type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 
+type PinnedHotel = {
+  id: string;
+  name: string;
+  city?: string;
+  country?: string;
+  stars?: number;
+  rating?: number;
+  reviewCount?: number;
+  description?: string;
+};
+
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const LITEAPI_MCP_BASE = "https://mcp.liteapi.travel/api/mcp";
 
@@ -224,6 +235,13 @@ function normalizeFlight(f: any, idx: number): Flight {
 /* ----------------------------- tools ------------------------------ */
 
 const TOOLS = {
+  // Virtual tool: the model returns natural-language text when no
+  // external call is needed (comparisons, questions about pinned
+  // hotels, explanations). Returns the text unchanged.
+  async respond(args: any) {
+    return String(args?.text ?? "");
+  },
+
   async search_hotels(args: any) {
     const res = await mcpCall("get_data_hotels", {
       cityName: args.destination,
@@ -312,7 +330,30 @@ function extractJson(raw: string): any {
 
 /* -------------------------- system prompt ------------------------- */
 
-const SYSTEM_PROMPT = `You are Duskgo, an AI travel concierge with access to real travel inventory via the LiteAPI MCP server. The user chats with you in natural language. For each user message, pick exactly one tool and return ONLY a JSON object (no prose, no markdown, no code fences) with this exact shape:
+function buildSystemPrompt(pinned?: PinnedHotel[]) {
+  const pinnedBlock =
+    pinned && pinned.length > 0
+      ? `\n\nThe user has pinned these hotels to the conversation for reference. Use them when answering comparison, questions, or "which is better" prompts — don't re-search unless the user asks for new options:\n${pinned
+          .map((h, i) => {
+            const facts = [
+              h.city && h.country ? `${h.city}, ${h.country}` : h.city || "",
+              typeof h.stars === "number" ? `${h.stars}★` : "",
+              typeof h.rating === "number" ? `rating ${h.rating}/10` : "",
+              typeof h.reviewCount === "number"
+                ? `${h.reviewCount} reviews`
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" · ");
+            const desc = h.description
+              ? ` — ${h.description.slice(0, 220)}`
+              : "";
+            return `${i + 1}. ${h.name} [id:${h.id}] ${facts}${desc}`;
+          })
+          .join("\n")}`
+      : "";
+
+  return `You are Duskgo, an AI travel concierge with access to real travel inventory via the LiteAPI MCP server. The user chats with you in natural language. For each user message, pick exactly one tool and return ONLY a JSON object (no prose, no markdown, no code fences) with this exact shape:
 
 {
   "reasoning": "<2-5 sentences, first-person, explaining how you interpreted the request and which tool you're calling and why>",
@@ -324,19 +365,24 @@ const SYSTEM_PROMPT = `You are Duskgo, an AI travel concierge with access to rea
 
 Available tools:
 
-1. search_hotels — Search hotels in a city. Use when the user asks about hotels, stays, accommodations, or a place to stay.
+1. respond — Answer the user directly with natural-language text. Use this when the user is asking a question, comparing pinned hotels, seeking advice, or the answer can be composed from conversation context without a fresh data lookup. This is the DEFAULT when the user has pinned hotels and is asking about them.
+   arguments: {
+     text: string              // the answer, 1-4 short paragraphs, can use markdown-ish bullets
+   }
+
+2. search_hotels — Search hotels in a city. Use when the user asks about hotels, stays, or a place to stay and wants NEW options.
    arguments: {
      destination: string,       // city name, e.g. "Paris"
      countryCode: string,       // ISO 3166-1 alpha-2, e.g. "FR"
      limit?: integer            // max 20
    }
 
-2. get_hotel_details — Get full details for one hotel. Use only when the user explicitly refers to a specific hotel by name or you need deeper info on a hotel already in the conversation.
+3. get_hotel_details — Get full details for one hotel by ID. Use only when you need deeper info on a specific hotel and don't already have it from pinned context or prior results.
    arguments: {
-     hotelId: string            // e.g. "lp1beec", obtained from a prior search_hotels result
+     hotelId: string            // e.g. "lp1beec"
    }
 
-3. search_flights — Search flights between two airports. Use when the user asks about flights, airfare, or getting to a destination.
+4. search_flights — Search flights between two airports. Use when the user asks about flights, airfare, or getting to a destination.
    arguments: {
      origin: string,            // 3-letter IATA airport code, e.g. "JFK"
      destination: string,       // 3-letter IATA airport code, e.g. "CDG"
@@ -350,20 +396,23 @@ Available tools:
 Rules:
 - Today is ${todayISO(0)}. If dates are vague ("next month", "in June"), pick sensible concrete future dates.
 - If only duration is given, assume check-in 30 days from today.
-- For flights, YOU must pick the correct 3-letter IATA airport codes — use the most common primary airport for each city (e.g. Paris → CDG, New York → JFK, London → LHR, Tokyo → HND, Los Angeles → LAX, Singapore → SIN).
-- ALWAYS include a tool_call. If the user is ambiguous, make your best guess and explain it in "reasoning".
-- Output ONLY the JSON object. No explanations outside the JSON.`;
+- For flights, YOU must pick the correct 3-letter IATA airport codes — use the most common primary airport for each city (Paris→CDG, New York→JFK, London→LHR, Tokyo→HND, Los Angeles→LAX, Singapore→SIN).
+- If pinned hotels exist and the user is asking about them (compare, which, details, best for X), call "respond" with a direct answer grounded in the pinned facts. Do NOT call search_hotels unless the user explicitly asks for new options.
+- ALWAYS include a tool_call. If ambiguous, make your best guess and explain it in "reasoning".
+- Output ONLY the JSON object. No explanations outside the JSON.${pinnedBlock}`;
+}
 
 /* ------------------------------ route ----------------------------- */
 
 export async function POST(req: Request) {
-  let body: { messages?: ChatMessage[] };
+  let body: { messages?: ChatMessage[]; pinned?: PinnedHotel[] };
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
   const messages = body.messages;
+  const pinned = Array.isArray(body.pinned) ? body.pinned : undefined;
   if (!Array.isArray(messages) || messages.length === 0) {
     return NextResponse.json({ error: "messages[] required" }, { status: 400 });
   }
@@ -379,7 +428,7 @@ export async function POST(req: Request) {
         await sleep(80);
 
         const llmMessages: ChatMessage[] = [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: buildSystemPrompt(pinned) },
           ...messages.filter(
             (m) => m.role === "user" || m.role === "assistant"
           ),
@@ -406,6 +455,15 @@ export async function POST(req: Request) {
         emit({ type: "tool_call", name, args });
 
         const result = await (TOOLS as any)[name](args);
+
+        // "respond" is a virtual tool — treat its text as the final
+        // message and skip emitting a tool_result (no UI to render).
+        if (name === "respond") {
+          emit({ type: "message", text: String(result || "") });
+          emit({ type: "done" });
+          return;
+        }
+
         emit({ type: "tool_result", name, args, result });
 
         let summary = "";
@@ -413,7 +471,7 @@ export async function POST(req: Request) {
           summary =
             result.length === 0
               ? `I couldn't find hotels in ${args.destination}. Try a different city.`
-              : `Found ${result.length} hotels in ${args.destination}. Tap any card for details or add it to your cart.`;
+              : `Found ${result.length} hotels in ${args.destination}. Tap any card for details or pin to chat to compare.`;
         } else if (name === "get_hotel_details") {
           summary = result?.name
             ? `Here are the details for ${result.name}.`

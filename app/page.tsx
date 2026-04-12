@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 
 /* ============================ types =========================== */
 
@@ -96,6 +96,7 @@ const SUGGESTIONS = [
 const LS_CHATS = "duskgo.chats.v1";
 const LS_CURRENT = "duskgo.current.v1";
 const LS_CART = "duskgo.cart.v1";
+const LS_PINNED = "duskgo.pinned.v1";
 
 const uid = () =>
   typeof crypto !== "undefined" && crypto.randomUUID
@@ -160,6 +161,18 @@ const Menu = (p: any) => (
     <line x1="3" y1="12" x2="21" y2="12" />
     <line x1="3" y1="6" x2="21" y2="6" />
     <line x1="3" y1="18" x2="21" y2="18" />
+  </svg>
+);
+const MessageSquarePlus = (p: any) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" {...svg(p)}>
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    <line x1="12" y1="8" x2="12" y2="14" />
+    <line x1="9" y1="11" x2="15" y2="11" />
+  </svg>
+);
+const Pin = (p: any) => (
+  <svg width="12" height="12" viewBox="0 0 24 24" {...svg(p)}>
+    <path d="M12 17v5M9 2h6l-1 7 4 4v2H6v-2l4-4z" />
   </svg>
 );
 const Plane = (p: any) => (
@@ -372,16 +385,34 @@ function ToolCallRow({
 function HotelCard({
   h,
   onOpen,
-  onAdd,
+  onAddCart,
+  onAddChat,
   inCart,
+  pinned,
 }: {
   h: Hotel;
   onOpen: () => void;
-  onAdd: () => void;
+  onAddCart: () => void;
+  onAddChat: () => void;
   inCart: boolean;
+  pinned: boolean;
 }) {
   return (
-    <article className="group overflow-hidden rounded-xl border bg-card transition hover:shadow-md">
+    <article className="group relative overflow-hidden rounded-xl border bg-card transition hover:shadow-md">
+      <button
+        type="button"
+        onClick={onAddCart}
+        aria-label={inCart ? "Added to cart" : "Add to cart"}
+        disabled={inCart}
+        className="absolute right-2 top-2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm ring-1 ring-border backdrop-blur transition hover:bg-background disabled:opacity-60"
+      >
+        {inCart ? (
+          <Check className="text-green-500" />
+        ) : (
+          <ShoppingBag />
+        )}
+      </button>
+
       <button
         type="button"
         onClick={onOpen}
@@ -401,9 +432,7 @@ function HotelCard({
         )}
         <div className="p-4 pb-2">
           <div className="flex items-start justify-between gap-2">
-            <h3 className="line-clamp-1 flex-1 text-sm font-medium">
-              {h.name}
-            </h3>
+            <h3 className="line-clamp-1 flex-1 text-sm font-medium">{h.name}</h3>
             {typeof h.stars === "number" && h.stars > 0 && (
               <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
                 {Array.from({ length: Math.round(h.stars) }).map((_, i) => (
@@ -427,7 +456,7 @@ function HotelCard({
           )}
         </div>
       </button>
-      <div className="flex items-center justify-between gap-2 border-t px-4 py-2">
+      <div className="flex items-center gap-2 border-t px-3 py-2">
         <button
           type="button"
           onClick={onOpen}
@@ -435,19 +464,20 @@ function HotelCard({
         >
           Details
         </button>
+        <div className="flex-1" />
         <button
           type="button"
-          onClick={onAdd}
-          disabled={inCart}
-          className="flex items-center gap-1 rounded-full border bg-background px-2.5 py-1 text-xs transition hover:bg-muted disabled:opacity-50"
+          onClick={onAddChat}
+          disabled={pinned}
+          className="flex items-center gap-1.5 rounded-full border bg-background px-2.5 py-1 text-xs font-medium transition hover:bg-muted disabled:opacity-50"
         >
-          {inCart ? (
+          {pinned ? (
             <>
-              <Check className="text-green-500" /> In cart
+              <Check className="text-green-500" /> Pinned
             </>
           ) : (
             <>
-              <Plus /> Add
+              <MessageSquarePlus /> Add to chat
             </>
           )}
         </button>
@@ -522,13 +552,17 @@ function FlightCard({
 function AssistantMessageView({
   msg,
   cart,
-  onAddHotel,
+  pinnedIds,
+  onAddHotelCart,
+  onAddHotelChat,
   onAddFlight,
   onOpenHotel,
 }: {
   msg: AssistantMessage;
   cart: CartItem[];
-  onAddHotel: (h: Hotel) => void;
+  pinnedIds: Set<string>;
+  onAddHotelCart: (h: Hotel) => void;
+  onAddHotelChat: (h: Hotel) => void;
   onAddFlight: (f: Flight) => void;
   onOpenHotel: (h: Hotel) => void;
 }) {
@@ -567,8 +601,10 @@ function AssistantMessageView({
               key={h.id}
               h={h}
               onOpen={() => onOpenHotel(h)}
-              onAdd={() => onAddHotel(h)}
+              onAddCart={() => onAddHotelCart(h)}
+              onAddChat={() => onAddHotelChat(h)}
               inCart={cartIds.has(h.id)}
+              pinned={pinnedIds.has(h.id)}
             />
           ))}
         </div>
@@ -650,54 +686,107 @@ function Sheet({
   );
 }
 
-function HotelDetailSheet({
+function HotelDetailModal({
   hotel,
   onClose,
-  onAdd,
+  onAddCart,
+  onAddChat,
   inCart,
+  pinned,
 }: {
   hotel: Hotel | null;
   onClose: () => void;
-  onAdd: (h: Hotel) => void;
+  onAddCart: (h: Hotel) => void;
+  onAddChat: (h: Hotel) => void;
   inCart: boolean;
+  pinned: boolean;
 }) {
+  useEffect(() => {
+    if (!hotel) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [hotel, onClose]);
+
+  if (!hotel) return null;
+
+  const loc = [hotel.address, hotel.city, hotel.country]
+    .filter(Boolean)
+    .join(", ");
+
   return (
-    <Sheet
-      open={!!hotel}
-      onClose={onClose}
-      side="right"
-      title="Hotel details"
-    >
-      {hotel && (
-        <div>
-          {hotel.mainPhoto && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={hotel.mainPhoto}
-              alt={hotel.name}
-              className="h-56 w-full object-cover"
-            />
+    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+      {/* Top bar */}
+      <header className="sticky top-0 z-10 flex items-center gap-3 border-b bg-background/90 px-4 py-3 backdrop-blur">
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-muted"
+          aria-label="Close"
+        >
+          <X />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold">{hotel.name}</div>
+          {loc && (
+            <div className="truncate text-xs text-muted-foreground">{loc}</div>
           )}
-          <div className="space-y-4 p-4">
-            <div>
-              <h3 className="text-lg font-semibold">{hotel.name}</h3>
-              <p className="text-xs text-muted-foreground">
-                {[hotel.address, hotel.city, hotel.country]
-                  .filter(Boolean)
-                  .join(", ")}
-              </p>
-              <div className="mt-2 flex items-center gap-3 text-xs">
-                {typeof hotel.stars === "number" && (
+        </div>
+        <button
+          type="button"
+          onClick={() => onAddCart(hotel)}
+          disabled={inCart}
+          className="flex h-9 w-9 items-center justify-center rounded-full border bg-card text-foreground transition hover:bg-muted disabled:opacity-60"
+          aria-label={inCart ? "Added to cart" : "Add to cart"}
+        >
+          {inCart ? <Check className="text-green-500" /> : <ShoppingBag />}
+        </button>
+      </header>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto pb-28">
+        {hotel.mainPhoto ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={hotel.mainPhoto}
+            alt={hotel.name}
+            className="h-[40vh] max-h-[520px] w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-[30vh] w-full items-center justify-center bg-muted text-sm text-muted-foreground">
+            No image available
+          </div>
+        )}
+
+        <div className="mx-auto max-w-3xl px-4 py-6">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="text-2xl font-semibold tracking-tight">
+                {hotel.name}
+              </h1>
+              <p className="mt-1 text-sm text-muted-foreground">{loc || "—"}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+                {typeof hotel.stars === "number" && hotel.stars > 0 && (
                   <span className="flex items-center gap-0.5">
                     {Array.from({ length: Math.round(hotel.stars) }).map(
                       (_, i) => (
                         <Star key={i} className="text-amber-400" />
                       )
                     )}
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      {hotel.stars}-star
+                    </span>
                   </span>
                 )}
                 {typeof hotel.rating === "number" && (
-                  <span className="font-medium">
+                  <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-semibold">
                     ★ {hotel.rating.toFixed(1)}
                     {hotel.reviewCount ? (
                       <span className="ml-1 font-normal text-muted-foreground">
@@ -706,33 +795,96 @@ function HotelDetailSheet({
                     ) : null}
                   </span>
                 )}
+                {hotel.currency && (
+                  <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+                    {hotel.currency}
+                  </span>
+                )}
               </div>
             </div>
-            {hotel.description && (
-              <p className="text-sm leading-relaxed text-muted-foreground">
+          </div>
+
+          {hotel.description && (
+            <section className="mt-8">
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                About
+              </h2>
+              <p className="whitespace-pre-line text-sm leading-relaxed text-foreground/90">
                 {hotel.description}
               </p>
-            )}
-            <button
-              type="button"
-              onClick={() => onAdd(hotel)}
-              disabled={inCart}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
-            >
-              {inCart ? (
-                <>
-                  <Check /> Added to cart
-                </>
-              ) : (
-                <>
-                  <Plus /> Add to cart
-                </>
-              )}
-            </button>
-          </div>
+            </section>
+          )}
+
+          <section className="mt-8 grid gap-4 sm:grid-cols-2">
+            <div className="rounded-xl border bg-card p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Location
+              </div>
+              <div className="mt-2 text-sm">{loc || "—"}</div>
+              {typeof hotel.latitude === "number" &&
+                typeof hotel.longitude === "number" && (
+                  <a
+                    className="mt-3 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                    href={`https://www.google.com/maps/search/?api=1&query=${hotel.latitude},${hotel.longitude}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open in Google Maps →
+                  </a>
+                )}
+            </div>
+            <div className="rounded-xl border bg-card p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Hotel ID
+              </div>
+              <div className="mt-2 font-mono text-xs">{hotel.id}</div>
+              <div className="mt-3 text-xs text-muted-foreground">
+                Use "Add to chat" to compare this with other hotels or ask
+                questions.
+              </div>
+            </div>
+          </section>
         </div>
-      )}
-    </Sheet>
+      </div>
+
+      {/* Sticky action bar */}
+      <div className="fixed inset-x-0 bottom-0 border-t bg-background/90 backdrop-blur">
+        <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            onClick={() => onAddCart(hotel)}
+            disabled={inCart}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl border bg-card py-3 text-sm font-medium transition hover:bg-muted disabled:opacity-50"
+          >
+            {inCart ? (
+              <>
+                <Check className="text-green-500" /> In cart
+              </>
+            ) : (
+              <>
+                <ShoppingBag /> Add to cart
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => onAddChat(hotel)}
+            disabled={pinned}
+            className="flex flex-[1.2] items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
+          >
+            {pinned ? (
+              <>
+                <Check /> Pinned to chat
+              </>
+            ) : (
+              <>
+                <MessageSquarePlus /> Ask about this
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -912,40 +1064,75 @@ function HistorySheet({
 
 /* ============================ input ========================== */
 
-function InputCard({
-  query,
-  setQuery,
-  onKeyDown,
-  loading,
-  autosize,
-}: {
+type InputCardProps = {
   query: string;
   setQuery: (v: string) => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   loading: boolean;
   autosize: (el: HTMLTextAreaElement) => void;
+};
+
+const InputCard = forwardRef<HTMLTextAreaElement, InputCardProps>(
+  function InputCard({ query, setQuery, onKeyDown, loading, autosize }, ref) {
+    return (
+      <div className="group relative rounded-3xl border bg-card shadow-sm transition focus-within:border-foreground/40 focus-within:shadow-md">
+        <textarea
+          ref={ref}
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            autosize(e.currentTarget);
+          }}
+          onKeyDown={onKeyDown}
+          placeholder="Ask for hotels, flights, or a whole trip…"
+          rows={1}
+          className="block w-full resize-none rounded-3xl bg-transparent px-5 py-4 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none"
+        />
+        <button
+          type="submit"
+          disabled={loading || !query.trim()}
+          aria-label="Send"
+          className="absolute bottom-2.5 right-2.5 flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
+        >
+          {loading ? <Spinner /> : <ArrowUp />}
+        </button>
+      </div>
+    );
+  }
+);
+
+function PinnedChips({
+  pinned,
+  onUnpin,
+}: {
+  pinned: Hotel[];
+  onUnpin: (id: string) => void;
 }) {
+  if (pinned.length === 0) return null;
   return (
-    <div className="group relative rounded-3xl border bg-card shadow-sm transition focus-within:border-foreground/40 focus-within:shadow-md">
-      <textarea
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          autosize(e.currentTarget);
-        }}
-        onKeyDown={onKeyDown}
-        placeholder="Ask for hotels, flights, or a whole trip…"
-        rows={1}
-        className="block w-full resize-none rounded-3xl bg-transparent px-5 py-4 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none"
-      />
-      <button
-        type="submit"
-        disabled={loading || !query.trim()}
-        aria-label="Send"
-        className="absolute bottom-2.5 right-2.5 flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
-      >
-        {loading ? <Spinner /> : <ArrowUp />}
-      </button>
+    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+      <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <Pin /> Pinned
+      </span>
+      {pinned.map((h) => (
+        <span
+          key={h.id}
+          className="flex items-center gap-1.5 rounded-full border bg-muted/50 py-1 pl-3 pr-1 text-xs"
+        >
+          <span className="max-w-[180px] truncate">{h.name}</span>
+          {h.city && (
+            <span className="text-muted-foreground">· {h.city}</span>
+          )}
+          <button
+            type="button"
+            onClick={() => onUnpin(h.id)}
+            className="flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground"
+            aria-label={`Unpin ${h.name}`}
+          >
+            <X />
+          </button>
+        </span>
+      ))}
     </div>
   );
 }
@@ -956,18 +1143,21 @@ export default function Home() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [pinned, setPinned] = useState<Hotel[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [detailHotel, setDetailHotel] = useState<Hotel | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // hydrate from localStorage on mount
   useEffect(() => {
     setChats(loadLS<Chat[]>(LS_CHATS, []));
     setCurrentId(loadLS<string | null>(LS_CURRENT, null));
     setCart(loadLS<CartItem[]>(LS_CART, []));
+    setPinned(loadLS<Hotel[]>(LS_PINNED, []));
   }, []);
 
   useEffect(() => {
@@ -979,6 +1169,22 @@ export default function Home() {
   useEffect(() => {
     saveLS(LS_CART, cart);
   }, [cart]);
+  useEffect(() => {
+    saveLS(LS_PINNED, pinned);
+  }, [pinned]);
+
+  const pinnedIds = useMemo(
+    () => new Set(pinned.map((h) => h.id)),
+    [pinned]
+  );
+
+  function pinHotel(h: Hotel) {
+    setPinned((prev) => (prev.some((p) => p.id === h.id) ? prev : [...prev, h]));
+    setTimeout(() => inputRef.current?.focus(), 50);
+  }
+  function unpinHotel(id: string) {
+    setPinned((prev) => prev.filter((h) => h.id !== id));
+  }
 
   const currentChat = useMemo(
     () => chats.find((c) => c.id === currentId) || null,
@@ -1088,10 +1294,21 @@ export default function Home() {
     };
 
     try {
+      const pinnedPayload = pinned.map((h) => ({
+        id: h.id,
+        name: h.name,
+        city: h.city,
+        country: h.country,
+        stars: h.stars,
+        rating: h.rating,
+        reviewCount: h.reviewCount,
+        description: h.description?.slice(0, 400),
+      }));
+
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: history }),
+        body: JSON.stringify({ messages: history, pinned: pinnedPayload }),
       });
       if (!res.body) throw new Error("No response body");
 
@@ -1252,7 +1469,9 @@ export default function Home() {
           </div>
 
           <form onSubmit={onSubmit} className="w-full">
+            <PinnedChips pinned={pinned} onUnpin={unpinHotel} />
             <InputCard
+              ref={inputRef}
               query={query}
               setQuery={setQuery}
               onKeyDown={onKeyDown}
@@ -1297,7 +1516,9 @@ export default function Home() {
                     key={m.id}
                     msg={m}
                     cart={cart}
-                    onAddHotel={addHotelToCart}
+                    pinnedIds={pinnedIds}
+                    onAddHotelCart={addHotelToCart}
+                    onAddHotelChat={pinHotel}
                     onAddFlight={addFlightToCart}
                     onOpenHotel={setDetailHotel}
                   />
@@ -1309,7 +1530,9 @@ export default function Home() {
 
           <div className="sticky bottom-0 -mx-4 border-t border-border/60 bg-background/80 px-4 pb-4 pt-3 backdrop-blur">
             <form onSubmit={onSubmit}>
+              <PinnedChips pinned={pinned} onUnpin={unpinHotel} />
               <InputCard
+                ref={inputRef}
                 query={query}
                 setQuery={setQuery}
                 onKeyDown={onKeyDown}
@@ -1342,13 +1565,16 @@ export default function Home() {
         cart={cart}
         onRemove={removeFromCart}
       />
-      <HotelDetailSheet
+      <HotelDetailModal
         hotel={detailHotel}
         onClose={() => setDetailHotel(null)}
-        onAdd={(h) => {
-          addHotelToCart(h);
+        onAddCart={(h) => addHotelToCart(h)}
+        onAddChat={(h) => {
+          pinHotel(h);
+          setDetailHotel(null);
         }}
         inCart={!!detailHotel && cart.some((c) => c.id === detailHotel.id)}
+        pinned={!!detailHotel && pinnedIds.has(detailHotel.id)}
       />
     </main>
   );
