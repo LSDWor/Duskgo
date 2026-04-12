@@ -82,7 +82,19 @@ type CartFlightItem = {
   addedAt: number;
   flight: Flight;
 };
-type CartItem = CartHotelItem | CartFlightItem;
+type CartRoomItem = {
+  kind: "room";
+  id: string;
+  addedAt: number;
+  hotelId: string;
+  hotelName: string;
+  hotelThumbnail?: string;
+  roomName: string;
+  price: number;
+  currency: string;
+  boardName?: string;
+};
+type CartItem = CartHotelItem | CartFlightItem | CartRoomItem;
 
 type ApiMessage = { role: "user" | "assistant"; content: string };
 
@@ -859,22 +871,28 @@ type DetailPayload = {
 function HotelDetailModal({
   hotel,
   onClose,
-  onAddCart,
+  onAddRoom,
   onAddChat,
-  inCart,
   pinned,
+  cartRoomIds,
 }: {
   hotel: Hotel | null;
   onClose: () => void;
-  onAddCart: (h: Hotel) => void;
+  onAddRoom: (
+    hotelId: string,
+    hotelName: string,
+    hotelThumbnail: string | undefined,
+    room: Room
+  ) => void;
   onAddChat: (h: Hotel) => void;
-  inCart: boolean;
   pinned: boolean;
+  cartRoomIds: Set<string>;
 }) {
   const [details, setDetails] = useState<DetailPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeImage, setActiveImage] = useState(0);
+  const [paused, setPaused] = useState(false);
 
   useEffect(() => {
     if (!hotel) {
@@ -900,6 +918,7 @@ function HotelDetailModal({
     setDetails(null);
     setError(null);
     setActiveImage(0);
+    setPaused(false);
     setLoading(true);
     const ac = new AbortController();
     fetch(`/api/hotel?id=${encodeURIComponent(hotel.id)}`, { signal: ac.signal })
@@ -914,6 +933,24 @@ function HotelDetailModal({
       .finally(() => setLoading(false));
     return () => ac.abort();
   }, [hotel?.id]);
+
+  const totalImages = details?.hotel.images.length ?? 0;
+
+  // Auto-cycle gallery every 4.5s; pause when user clicks a thumbnail.
+  useEffect(() => {
+    if (paused || totalImages <= 1) return;
+    const id = setInterval(() => {
+      setActiveImage((i) => (i + 1) % totalImages);
+    }, 4500);
+    return () => clearInterval(id);
+  }, [paused, totalImages]);
+
+  // Resume auto-cycle 10s after a manual pause.
+  useEffect(() => {
+    if (!paused) return;
+    const t = setTimeout(() => setPaused(false), 10000);
+    return () => clearTimeout(t);
+  }, [paused]);
 
   if (!hotel) return null;
 
@@ -959,15 +996,6 @@ function HotelDetailModal({
             <div className="truncate text-xs text-muted-foreground">{loc}</div>
           )}
         </div>
-        <button
-          type="button"
-          onClick={() => onAddCart(hotel)}
-          disabled={inCart}
-          className="flex h-9 w-9 items-center justify-center rounded-full border bg-card text-foreground transition hover:bg-muted disabled:opacity-60"
-          aria-label={inCart ? "Added to cart" : "Add to cart"}
-        >
-          {inCart ? <Check className="text-green-500" /> : <ShoppingBag />}
-        </button>
       </header>
 
       {/* Body */}
@@ -991,6 +1019,15 @@ function HotelDetailModal({
           </div>
         )}
 
+        {/* Image counter pill */}
+        {h.images.length > 1 && (
+          <div className="pointer-events-none absolute left-1/2 top-[calc(40vh+0.75rem)] z-10 -translate-x-1/2 sm:top-[calc(40vh+0.75rem)]">
+            <span className="rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
+              {activeImage + 1} / {h.images.length}
+            </span>
+          </div>
+        )}
+
         {/* Image gallery strip */}
         {h.images.length > 1 && (
           <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pt-3">
@@ -998,7 +1035,10 @@ function HotelDetailModal({
               <button
                 key={i}
                 type="button"
-                onClick={() => setActiveImage(i)}
+                onClick={() => {
+                  setActiveImage(i);
+                  setPaused(true);
+                }}
                 className={`h-16 w-24 shrink-0 overflow-hidden rounded-lg border transition ${
                   i === activeImage
                     ? "ring-2 ring-foreground"
@@ -1170,13 +1210,20 @@ function HotelDetailModal({
 
             {details && details.rooms.length > 0 && (
               <div className="space-y-3">
-                {details.rooms.map((r, i) => (
-                  <RoomRow
-                    key={r.offerId || `${r.name}-${i}`}
-                    room={r}
-                    index={i}
-                  />
-                ))}
+                {details.rooms.map((r, i) => {
+                  const cartId = `${h.id}::${r.offerId || r.name}`;
+                  return (
+                    <RoomRow
+                      key={r.offerId || `${r.name}-${i}`}
+                      room={r}
+                      index={i}
+                      inCart={cartRoomIds.has(cartId)}
+                      onAdd={() =>
+                        onAddRoom(h.id, h.name, h.thumbnail || h.mainPhoto, r)
+                      }
+                    />
+                  );
+                })}
               </div>
             )}
           </section>
@@ -1254,53 +1301,57 @@ function HotelDetailModal({
             </section>
           )}
 
-          {/* Location card */}
-          <section className="mt-10 animate-fade-in-up">
-            <div className="rounded-xl border bg-card p-4">
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Location
+          {/* Location + embedded map */}
+          {typeof h.latitude === "number" && typeof h.longitude === "number" && (
+            <section className="mt-10 animate-fade-in-up">
+              <div className="mb-3 flex items-baseline justify-between">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                  Location
+                </h2>
+                <a
+                  className="text-xs text-muted-foreground hover:text-foreground"
+                  href={`https://www.google.com/maps/search/?api=1&query=${h.latitude},${h.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open in Google Maps →
+                </a>
               </div>
-              <div className="mt-2 text-sm">{loc || "—"}</div>
-              {typeof h.latitude === "number" &&
-                typeof h.longitude === "number" && (
-                  <a
-                    className="mt-3 inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                    href={`https://www.google.com/maps/search/?api=1&query=${h.latitude},${h.longitude}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open in Google Maps →
-                  </a>
-                )}
-            </div>
-          </section>
+              <div className="overflow-hidden rounded-xl border bg-card">
+                <iframe
+                  key={`${h.latitude},${h.longitude}`}
+                  title={`Map of ${h.name}`}
+                  className="h-72 w-full"
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                  src={`https://www.openstreetmap.org/export/embed.html?bbox=${
+                    h.longitude - 0.008
+                  }%2C${h.latitude - 0.004}%2C${h.longitude + 0.008}%2C${
+                    h.latitude + 0.004
+                  }&layer=mapnik&marker=${h.latitude}%2C${h.longitude}`}
+                />
+                <div className="flex items-center justify-between px-4 py-2.5 text-xs text-muted-foreground">
+                  <span className="truncate">{loc || "—"}</span>
+                  {h.airportCode && (
+                    <span className="ml-2 shrink-0 rounded-full bg-muted px-2 py-0.5">
+                      {h.airportCode}
+                    </span>
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
         </div>
       </div>
 
-      {/* Sticky action bar */}
-      <div className="fixed inset-x-0 bottom-0 border-t bg-background/90 backdrop-blur">
-        <div className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-3">
-          <button
-            type="button"
-            onClick={() => onAddCart(hotel)}
-            disabled={inCart}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl border bg-card py-3 text-sm font-medium transition hover:bg-muted disabled:opacity-50"
-          >
-            {inCart ? (
-              <>
-                <Check className="text-green-500" /> In cart
-              </>
-            ) : (
-              <>
-                <ShoppingBag /> Add to cart
-              </>
-            )}
-          </button>
+      {/* Sticky action bar — single CTA; rooms have their own cart buttons */}
+      <div className="fixed inset-x-0 bottom-0 bg-gradient-to-t from-background via-background/90 to-transparent pb-4 pt-10">
+        <div className="mx-auto max-w-3xl px-4">
           <button
             type="button"
             onClick={() => onAddChat(hotel)}
             disabled={pinned}
-            className="flex flex-[1.2] items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3.5 text-sm font-medium text-primary-foreground shadow-lg shadow-black/20 transition hover:opacity-90 disabled:opacity-50"
           >
             {pinned ? (
               <>
@@ -1308,7 +1359,7 @@ function HotelDetailModal({
               </>
             ) : (
               <>
-                <MessageSquarePlus /> Ask about this
+                <MessageSquarePlus /> Ask about this hotel
               </>
             )}
           </button>
@@ -1318,7 +1369,17 @@ function HotelDetailModal({
   );
 }
 
-function RoomRow({ room, index }: { room: Room; index: number }) {
+function RoomRow({
+  room,
+  index,
+  inCart,
+  onAdd,
+}: {
+  room: Room;
+  index: number;
+  inCart: boolean;
+  onAdd: () => void;
+}) {
   const savings =
     room.suggestedPrice && room.price
       ? Math.round(
@@ -1328,7 +1389,7 @@ function RoomRow({ room, index }: { room: Room; index: number }) {
 
   return (
     <article
-      className="animate-fade-in-up rounded-xl border bg-card p-4"
+      className="animate-fade-in-up rounded-xl border bg-card p-4 transition hover:shadow-md"
       style={{ animationDelay: `${index * 50}ms` }}
     >
       <div className="flex items-start justify-between gap-4">
@@ -1362,21 +1423,39 @@ function RoomRow({ room, index }: { room: Room; index: number }) {
               ))}
           </div>
         </div>
-        <div className="shrink-0 text-right">
-          {room.suggestedPrice && savings > 0 && (
-            <div className="text-xs text-muted-foreground line-through">
-              {formatPrice(room.suggestedPrice, room.currency)}
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          <div className="text-right">
+            {room.suggestedPrice && savings > 0 && (
+              <div className="text-xs text-muted-foreground line-through">
+                {formatPrice(room.suggestedPrice, room.currency)}
+              </div>
+            )}
+            <div className="text-lg font-semibold">
+              {formatPrice(room.price, room.currency)}
             </div>
-          )}
-          <div className="text-lg font-semibold">
-            {formatPrice(room.price, room.currency)}
+            {savings > 0 && (
+              <div className="text-[10px] font-semibold text-green-600 dark:text-green-400">
+                Save {savings}%
+              </div>
+            )}
+            <div className="text-[10px] text-muted-foreground">total</div>
           </div>
-          {savings > 0 && (
-            <div className="text-[10px] font-semibold text-green-600 dark:text-green-400">
-              Save {savings}%
-            </div>
-          )}
-          <div className="text-[10px] text-muted-foreground">total</div>
+          <button
+            type="button"
+            onClick={onAdd}
+            disabled={inCart}
+            className="flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
+          >
+            {inCart ? (
+              <>
+                <Check /> In cart
+              </>
+            ) : (
+              <>
+                <Plus /> Add to cart
+              </>
+            )}
+          </button>
         </div>
       </div>
     </article>
@@ -1397,6 +1476,7 @@ function CartSheet({
   const total = cart.reduce((sum, c) => {
     if (c.kind === "flight" && typeof c.flight.price === "number")
       return sum + c.flight.price;
+    if (c.kind === "room") return sum + c.price;
     return sum;
   }, 0);
 
@@ -1434,6 +1514,37 @@ function CartSheet({
                       </div>
                     </div>
                   </>
+                ) : item.kind === "room" ? (
+                  <>
+                    {item.hotelThumbnail ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={item.hotelThumbnail}
+                        alt={item.hotelName}
+                        className="h-16 w-20 shrink-0 rounded-lg object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-16 w-20 shrink-0 items-center justify-center rounded-lg bg-muted">
+                        <Bed />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Bed />
+                        Room
+                      </div>
+                      <div className="truncate text-sm font-medium">
+                        {item.hotelName}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {item.roomName}
+                        {item.boardName ? ` · ${item.boardName}` : ""}
+                      </div>
+                      <div className="mt-0.5 text-xs font-semibold">
+                        {formatPrice(item.price, item.currency)}
+                      </div>
+                    </div>
+                  </>
                 ) : (
                   <>
                     <div className="flex h-16 w-20 shrink-0 items-center justify-center rounded-lg bg-muted">
@@ -1467,7 +1578,7 @@ function CartSheet({
           <div className="border-t p-4">
             {total > 0 && (
               <div className="mb-3 flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Flights total</span>
+                <span className="text-muted-foreground">Total</span>
                 <span className="font-semibold">{formatPrice(total, "USD")}</span>
               </div>
             )}
@@ -1907,6 +2018,33 @@ export default function Home() {
         : [{ kind: "flight", id: f.id, addedAt: Date.now(), flight: f }, ...prev]
     );
   }
+  function addRoomToCart(
+    hotelId: string,
+    hotelName: string,
+    hotelThumbnail: string | undefined,
+    room: Room
+  ) {
+    const id = `${hotelId}::${room.offerId || room.name}`;
+    setCart((prev) =>
+      prev.some((c) => c.id === id)
+        ? prev
+        : [
+            {
+              kind: "room",
+              id,
+              addedAt: Date.now(),
+              hotelId,
+              hotelName,
+              hotelThumbnail,
+              roomName: room.name,
+              price: room.price ?? 0,
+              currency: room.currency || "USD",
+              boardName: room.boardName,
+            },
+            ...prev,
+          ]
+    );
+  }
   function removeFromCart(id: string) {
     setCart((prev) => prev.filter((c) => c.id !== id));
   }
@@ -2044,17 +2182,20 @@ export default function Home() {
             </div>
           </section>
 
-          <div className="sticky bottom-0 -mx-4 border-t border-border/60 bg-background/80 px-4 pb-4 pt-3 backdrop-blur">
-            <form onSubmit={onSubmit}>
+          <div className="sticky bottom-0 -mx-4 px-4 pb-4 pt-10">
+            <div className="pointer-events-none absolute inset-x-0 -top-2 bottom-0 bg-gradient-to-t from-background via-background/95 to-transparent" />
+            <form onSubmit={onSubmit} className="relative">
               <PinnedChips pinned={pinned} onUnpin={unpinHotel} />
-              <InputCard
-                ref={inputRef}
-                query={query}
-                setQuery={setQuery}
-                onKeyDown={onKeyDown}
-                loading={loading}
-                autosize={autosize}
-              />
+              <div className="rounded-3xl shadow-xl shadow-black/10 dark:shadow-black/40">
+                <InputCard
+                  ref={inputRef}
+                  query={query}
+                  setQuery={setQuery}
+                  onKeyDown={onKeyDown}
+                  loading={loading}
+                  autosize={autosize}
+                />
+              </div>
             </form>
           </div>
         </>
@@ -2084,10 +2225,14 @@ export default function Home() {
       <HotelDetailModal
         hotel={detailHotel}
         onClose={() => setDetailHotel(null)}
-        onAddCart={(h) => addHotelToCart(h)}
+        onAddRoom={addRoomToCart}
         onAddChat={(h) => askAboutHotel(h)}
-        inCart={!!detailHotel && cart.some((c) => c.id === detailHotel.id)}
         pinned={!!detailHotel && pinnedIds.has(detailHotel.id)}
+        cartRoomIds={
+          new Set(
+            cart.filter((c) => c.kind === "room").map((c) => c.id)
+          )
+        }
       />
     </main>
   );
