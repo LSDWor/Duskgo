@@ -1945,6 +1945,17 @@ function HotelDetailModal({
   );
 }
 
+const WL_DOMAIN = process.env.NEXT_PUBLIC_WL_DOMAIN || "";
+
+function buildBookingUrl(offerId: string, currency = "USD") {
+  if (!WL_DOMAIN) return null;
+  const url = new URL(`https://${WL_DOMAIN}/booking`);
+  url.searchParams.set("offerId", offerId);
+  url.searchParams.set("currency", currency);
+  url.searchParams.set("language", "en");
+  return url.toString();
+}
+
 function RoomRow({
   room,
   index,
@@ -2016,22 +2027,48 @@ function RoomRow({
             )}
             <div className="text-[10px] text-muted-foreground">total</div>
           </div>
-          <button
-            type="button"
-            onClick={onAdd}
-            disabled={inCart}
-            className="flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-60"
-          >
-            {inCart ? (
-              <>
-                <Check /> In cart
-              </>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onAdd}
+              disabled={inCart}
+              className="flex items-center gap-1 rounded-full border bg-card px-2.5 py-1.5 text-xs font-medium transition hover:bg-muted disabled:opacity-60"
+            >
+              {inCart ? (
+                <>
+                  <Check className="text-green-500" /> Saved
+                </>
+              ) : (
+                <>
+                  <Plus /> Save
+                </>
+              )}
+            </button>
+            {room.offerId && buildBookingUrl(room.offerId, room.currency) ? (
+              <a
+                href={buildBookingUrl(room.offerId, room.currency)!}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground transition hover:opacity-90"
+              >
+                Book now →
+              </a>
             ) : (
-              <>
-                <Plus /> Add to cart
-              </>
+              <button
+                type="button"
+                onClick={() =>
+                  alert(
+                    room.offerId
+                      ? "Set NEXT_PUBLIC_WL_DOMAIN to enable booking via white-label checkout."
+                      : "No offer ID available for this room."
+                  )
+                }
+                className="flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-1.5 text-xs font-medium text-primary-foreground transition hover:opacity-90"
+              >
+                Book now →
+              </button>
             )}
-          </button>
+          </div>
         </div>
       </div>
     </article>
