@@ -1,29 +1,12 @@
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 type ChatMessage = { role: "user" | "assistant" | "system"; content: string };
 
-type Hotel = {
-  id: string;
-  name: string;
-  address?: string;
-  city?: string;
-  country?: string;
-  rating?: number;
-  thumbnail?: string;
-};
-
-type Parsed = {
-  destination: string;
-  countryCode: string;
-  checkIn: string;
-  checkOut: string;
-  adults: number;
-};
-
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const LITEAPI_URL = "https://api.liteapi.travel/v3.0/data/hotels";
+const LITEAPI_MCP_BASE = "https://mcp.liteapi.travel/api/mcp";
 
 const FALLBACK_MODELS = [
   process.env.OPENROUTER_MODEL,
@@ -34,9 +17,9 @@ const FALLBACK_MODELS = [
   "nousresearch/hermes-3-llama-3.1-405b:free",
 ].filter(Boolean) as string[];
 
-function todayISO(offsetDays = 0): string {
+function todayISO(offset = 0) {
   const d = new Date();
-  d.setUTCDate(d.getUTCDate() + offsetDays);
+  d.setUTCDate(d.getUTCDate() + offset);
   return d.toISOString().slice(0, 10);
 }
 
@@ -44,7 +27,247 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function callOpenRouter(apiKey: string, model: string, messages: ChatMessage[]) {
+/* ---------------------------- MCP client ---------------------------- */
+
+function mcpUrl() {
+  const key = process.env.LITEAPI_KEY;
+  if (!key) throw new Error("LITEAPI_KEY not set");
+  return `${LITEAPI_MCP_BASE}?apiKey=${encodeURIComponent(key)}`;
+}
+
+async function mcpCall(tool: string, args: Record<string, unknown>): Promise<any> {
+  const res = await fetch(mcpUrl(), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: crypto.randomUUID(),
+      method: "tools/call",
+      params: { name: tool, arguments: args },
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`MCP ${tool} ${res.status}: ${text.slice(0, 200)}`);
+  }
+
+  const body = await res.text();
+
+  // Response may be plain JSON or SSE (data: {...} lines).
+  let envelope: any = null;
+  if (body.trimStart().startsWith("{")) {
+    envelope = JSON.parse(body);
+  } else {
+    const match = body.match(/data: (\{[\s\S]*?\})\s*(?:\r?\n|$)/);
+    if (!match) throw new Error(`MCP ${tool}: no data event in response`);
+    envelope = JSON.parse(match[1]);
+  }
+
+  if (envelope.error) {
+    throw new Error(`MCP ${tool}: ${JSON.stringify(envelope.error).slice(0, 200)}`);
+  }
+
+  const content = envelope?.result?.content;
+  if (Array.isArray(content) && content.length > 0 && content[0].text) {
+    const text = content[0].text as string;
+
+    // Some MCP tool wrappers return an error as a mixed text+JSON blob
+    // like: "Error: API request failed: 403 Forbidden\n{"error":{...}}".
+    // Detect it and throw a clean message.
+    const errMatch = text.match(/\{"error":\{[^}]*?"(?:description|message)":"([^"]+)"/);
+    if (/^Error:/.test(text) || errMatch) {
+      const msg = errMatch?.[1] || text.split("\n")[0].replace(/^Error:\s*/, "");
+      throw new Error(`MCP ${tool}: ${msg}`);
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+  return envelope?.result;
+}
+
+/* --------------------------- normalizers --------------------------- */
+
+type Hotel = {
+  id: string;
+  name: string;
+  description?: string;
+  address?: string;
+  city?: string;
+  country?: string;
+  stars?: number;
+  rating?: number;
+  reviewCount?: number;
+  thumbnail?: string;
+  mainPhoto?: string;
+  latitude?: number;
+  longitude?: number;
+  currency?: string;
+};
+
+function normalizeHotel(h: any): Hotel {
+  return {
+    id: String(h.id ?? h.hotelId ?? ""),
+    name: String(h.name ?? "Unknown hotel"),
+    description:
+      typeof h.hotelDescription === "string"
+        ? h.hotelDescription.replace(/<[^>]+>/g, " ").slice(0, 500)
+        : undefined,
+    address: h.address ?? undefined,
+    city: h.city ?? undefined,
+    country: (h.country ?? "").toString().toUpperCase() || undefined,
+    stars: typeof h.stars === "number" ? h.stars : undefined,
+    rating: typeof h.rating === "number" ? h.rating : undefined,
+    reviewCount:
+      typeof h.reviewCount === "number" ? h.reviewCount : undefined,
+    thumbnail: h.thumbnail ?? h.main_photo ?? undefined,
+    mainPhoto: h.main_photo ?? h.thumbnail ?? undefined,
+    latitude: h.latitude ?? undefined,
+    longitude: h.longitude ?? undefined,
+    currency: h.currency ?? undefined,
+  };
+}
+
+type Flight = {
+  id: string;
+  price?: number;
+  currency?: string;
+  airline?: string;
+  airlineCode?: string;
+  origin?: string;
+  destination?: string;
+  departureTime?: string;
+  arrivalTime?: string;
+  duration?: string;
+  stops?: number;
+  cabin?: string;
+  raw?: any;
+};
+
+function normalizeFlight(f: any, idx: number): Flight {
+  // LiteAPI flight offers have a few possible shapes. Extract defensively.
+  const id =
+    f.id ?? f.offerId ?? f.offer_id ?? f.uniqueId ?? `flight-${idx}`;
+  const price =
+    f.price?.total ??
+    f.totalPrice ??
+    f.total ??
+    f.pricing?.total ??
+    f.price ??
+    undefined;
+  const currency =
+    f.price?.currency ??
+    f.currency ??
+    f.pricing?.currency ??
+    undefined;
+
+  const firstSegment =
+    f.itineraries?.[0]?.segments?.[0] ??
+    f.segments?.[0] ??
+    f.slices?.[0]?.segments?.[0] ??
+    {};
+
+  const lastSegment =
+    f.itineraries?.[0]?.segments?.slice(-1)?.[0] ??
+    f.segments?.slice(-1)?.[0] ??
+    f.slices?.[0]?.segments?.slice(-1)?.[0] ??
+    firstSegment;
+
+  const stopsCount =
+    (f.itineraries?.[0]?.segments?.length ?? f.segments?.length ?? 1) - 1;
+
+  return {
+    id: String(id),
+    price: typeof price === "number" ? price : undefined,
+    currency,
+    airline:
+      firstSegment.carrierName ??
+      firstSegment.airline?.name ??
+      firstSegment.operating?.carrierName ??
+      undefined,
+    airlineCode:
+      firstSegment.carrierCode ??
+      firstSegment.airline?.iata ??
+      firstSegment.operating?.carrierCode ??
+      undefined,
+    origin:
+      firstSegment.departure?.iataCode ??
+      firstSegment.origin ??
+      firstSegment.from ??
+      undefined,
+    destination:
+      lastSegment.arrival?.iataCode ??
+      lastSegment.destination ??
+      lastSegment.to ??
+      undefined,
+    departureTime:
+      firstSegment.departure?.at ??
+      firstSegment.departureTime ??
+      undefined,
+    arrivalTime:
+      lastSegment.arrival?.at ??
+      lastSegment.arrivalTime ??
+      undefined,
+    duration: f.duration ?? f.totalDuration ?? undefined,
+    stops: Number.isFinite(stopsCount) ? Math.max(0, stopsCount) : undefined,
+    cabin: f.cabinClass ?? firstSegment.cabin ?? undefined,
+  };
+}
+
+/* ----------------------------- tools ------------------------------ */
+
+const TOOLS = {
+  async search_hotels(args: any) {
+    const res = await mcpCall("get_data_hotels", {
+      cityName: args.destination,
+      countryCode: args.countryCode,
+      limit: Math.min(Number(args.limit) || 20, 20),
+    });
+    const list: any[] = res?.data || res || [];
+    return list.map(normalizeHotel);
+  },
+
+  async get_hotel_details(args: any) {
+    const res = await mcpCall("get_data_hotel", { hotelId: args.hotelId });
+    const raw = res?.data || res;
+    return normalizeHotel(raw);
+  },
+
+  async search_flights(args: any) {
+    const payload: any = {
+      origin: String(args.origin || "").toUpperCase(),
+      destination: String(args.destination || "").toUpperCase(),
+      departureDate: args.departureDate,
+      adults: Number.isFinite(args.adults) ? Number(args.adults) : 1,
+      currency: args.currency || "USD",
+    };
+    if (args.returnDate) payload.returnDate = args.returnDate;
+    if (args.cabinClass) payload.cabinClass = args.cabinClass;
+
+    const res = await mcpCall("post_flights_rates", payload);
+    const offers: any[] =
+      res?.data?.offers ??
+      res?.offers ??
+      res?.data ??
+      (Array.isArray(res) ? res : []);
+    return offers.slice(0, 15).map((f, i) => normalizeFlight(f, i));
+  },
+};
+
+/* --------------------------- OpenRouter --------------------------- */
+
+async function callOpenRouter(
+  apiKey: string,
+  model: string,
+  messages: ChatMessage[]
+) {
   const res = await fetch(OPENROUTER_URL, {
     method: "POST",
     headers: {
@@ -87,76 +310,51 @@ function extractJson(raw: string): any {
   return JSON.parse(m[0]);
 }
 
-async function searchHotels(args: Parsed): Promise<Hotel[]> {
-  const apiKey = process.env.LITEAPI_KEY;
-  if (!apiKey) throw new Error("LITEAPI_KEY not set");
+/* -------------------------- system prompt ------------------------- */
 
-  const url = new URL(LITEAPI_URL);
-  url.searchParams.set("countryCode", args.countryCode);
-  url.searchParams.set("cityName", args.destination);
-  url.searchParams.set("limit", "20");
-
-  const res = await fetch(url.toString(), {
-    headers: { "X-API-Key": apiKey, accept: "application/json" },
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`LiteAPI ${res.status}: ${text.slice(0, 200)}`);
-  }
-  const json = await res.json();
-  const raw: any[] = json?.data || [];
-
-  return raw.slice(0, 20).map((h) => ({
-    id: String(h.id ?? h.hotelId ?? crypto.randomUUID()),
-    name: String(h.name ?? "Unknown hotel"),
-    address: h.address ?? undefined,
-    city: h.city ?? undefined,
-    country: h.country ?? undefined,
-    rating: typeof h.rating === "number" ? h.rating : undefined,
-    thumbnail: h.thumbnail ?? h.main_photo ?? h.image ?? undefined,
-  }));
-}
-
-const TOOLS = {
-  search_hotels: searchHotels,
-} as const;
-
-const SYSTEM_PROMPT = `You are Duskgo, an AI travel concierge. The user describes a trip in natural language. You plan which tool to call and return ONLY a JSON object (no prose, no markdown, no code fences) with this exact shape:
+const SYSTEM_PROMPT = `You are Duskgo, an AI travel concierge with access to real travel inventory via the LiteAPI MCP server. The user chats with you in natural language. For each user message, pick exactly one tool and return ONLY a JSON object (no prose, no markdown, no code fences) with this exact shape:
 
 {
-  "reasoning": "<2-5 sentences explaining how you understood the request: destination, dates, travelers, any constraints. First-person, conversational.>",
+  "reasoning": "<2-5 sentences, first-person, explaining how you interpreted the request and which tool you're calling and why>",
   "tool_call": {
-    "name": "search_hotels",
-    "arguments": {
-      "destination": "<primary city name>",
-      "countryCode": "<ISO 3166-1 alpha-2>",
-      "checkIn": "YYYY-MM-DD",
-      "checkOut": "YYYY-MM-DD",
-      "adults": <integer, default 2>
-    }
+    "name": "<tool name>",
+    "arguments": { ... }
   }
 }
 
 Available tools:
-- search_hotels(destination, countryCode, checkIn, checkOut, adults): Returns hotels in a city.
+
+1. search_hotels — Search hotels in a city. Use when the user asks about hotels, stays, accommodations, or a place to stay.
+   arguments: {
+     destination: string,       // city name, e.g. "Paris"
+     countryCode: string,       // ISO 3166-1 alpha-2, e.g. "FR"
+     limit?: integer            // max 20
+   }
+
+2. get_hotel_details — Get full details for one hotel. Use only when the user explicitly refers to a specific hotel by name or you need deeper info on a hotel already in the conversation.
+   arguments: {
+     hotelId: string            // e.g. "lp1beec", obtained from a prior search_hotels result
+   }
+
+3. search_flights — Search flights between two airports. Use when the user asks about flights, airfare, or getting to a destination.
+   arguments: {
+     origin: string,            // 3-letter IATA airport code, e.g. "JFK"
+     destination: string,       // 3-letter IATA airport code, e.g. "CDG"
+     departureDate: string,     // YYYY-MM-DD
+     returnDate?: string,       // YYYY-MM-DD for round trips; omit for one-way
+     adults: integer,           // default 1
+     cabinClass?: string,       // "ECONOMY" | "PREMIUM_ECONOMY" | "BUSINESS" | "FIRST"
+     currency?: string          // ISO 4217, default "USD"
+   }
 
 Rules:
-- Today is ${todayISO(0)}. If dates are vague ("next month", "in June"), pick sensible concrete dates in the future.
+- Today is ${todayISO(0)}. If dates are vague ("next month", "in June"), pick sensible concrete future dates.
 - If only duration is given, assume check-in 30 days from today.
-- Always include a tool_call. If the user is ambiguous, make your best guess and explain it in "reasoning".
+- For flights, YOU must pick the correct 3-letter IATA airport codes — use the most common primary airport for each city (e.g. Paris → CDG, New York → JFK, London → LHR, Tokyo → HND, Los Angeles → LAX, Singapore → SIN).
+- ALWAYS include a tool_call. If the user is ambiguous, make your best guess and explain it in "reasoning".
 - Output ONLY the JSON object. No explanations outside the JSON.`;
 
-function formatDateRange(a: string, b: string) {
-  try {
-    const fmt = new Intl.DateTimeFormat("en-US", {
-      month: "short",
-      day: "numeric",
-    });
-    return `${fmt.format(new Date(a))} → ${fmt.format(new Date(b))}`;
-  } catch {
-    return `${a} → ${b}`;
-  }
-}
+/* ------------------------------ route ----------------------------- */
 
 export async function POST(req: Request) {
   let body: { messages?: ChatMessage[] };
@@ -178,11 +376,13 @@ export async function POST(req: Request) {
 
       try {
         emit({ type: "status", text: "Thinking…" });
-        await sleep(120);
+        await sleep(80);
 
         const llmMessages: ChatMessage[] = [
           { role: "system", content: SYSTEM_PROMPT },
-          ...messages.filter((m) => m.role === "user" || m.role === "assistant"),
+          ...messages.filter(
+            (m) => m.role === "user" || m.role === "assistant"
+          ),
         ];
 
         const raw = await callWithFallback(llmMessages);
@@ -198,33 +398,33 @@ export async function POST(req: Request) {
         }
         const name: string = String(toolCall.name || "");
         const args = toolCall.arguments || toolCall.args || {};
+
         if (!(name in TOOLS)) {
           throw new Error(`Unknown tool: ${name}`);
         }
 
-        const parsed: Parsed = {
-          destination: String(args.destination || "").trim(),
-          countryCode: String(args.countryCode || "").toUpperCase().trim(),
-          checkIn: String(args.checkIn || todayISO(30)),
-          checkOut: String(args.checkOut || todayISO(33)),
-          adults: Number.isFinite(args.adults) ? Number(args.adults) : 2,
-        };
-        if (!parsed.destination || !parsed.countryCode) {
-          throw new Error("Model returned incomplete tool arguments");
+        emit({ type: "tool_call", name, args });
+
+        const result = await (TOOLS as any)[name](args);
+        emit({ type: "tool_result", name, args, result });
+
+        let summary = "";
+        if (name === "search_hotels") {
+          summary =
+            result.length === 0
+              ? `I couldn't find hotels in ${args.destination}. Try a different city.`
+              : `Found ${result.length} hotels in ${args.destination}. Tap any card for details or add it to your cart.`;
+        } else if (name === "get_hotel_details") {
+          summary = result?.name
+            ? `Here are the details for ${result.name}.`
+            : "Hotel details loaded.";
+        } else if (name === "search_flights") {
+          summary =
+            result.length === 0
+              ? `No flights found from ${args.origin} to ${args.destination} on ${args.departureDate}.`
+              : `Found ${result.length} flight${result.length === 1 ? "" : "s"} from ${args.origin} to ${args.destination}.`;
         }
-
-        emit({ type: "tool_call", name, args: parsed });
-
-        const hotels = await (TOOLS as any)[name](parsed);
-        emit({ type: "tool_result", name, parsed, hotels });
-
-        const when = formatDateRange(parsed.checkIn, parsed.checkOut);
-        const summary =
-          hotels.length === 0
-            ? `I couldn't find hotels in ${parsed.destination} for ${when}. Try a different city or dates.`
-            : `Found ${hotels.length} hotels in ${parsed.destination} for ${when}, ${parsed.adults} ${parsed.adults === 1 ? "adult" : "adults"}.`;
         emit({ type: "message", text: summary });
-
         emit({ type: "done" });
       } catch (err: any) {
         emit({ type: "error", text: err?.message || "Internal error" });

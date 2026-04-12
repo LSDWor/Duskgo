@@ -1,24 +1,54 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+/* ============================ types =========================== */
 
 type Hotel = {
   id: string;
   name: string;
+  description?: string;
   address?: string;
   city?: string;
   country?: string;
+  stars?: number;
   rating?: number;
+  reviewCount?: number;
   thumbnail?: string;
+  mainPhoto?: string;
+  latitude?: number;
+  longitude?: number;
+  currency?: string;
 };
 
-type Parsed = {
-  destination: string;
-  countryCode: string;
-  checkIn: string;
-  checkOut: string;
-  adults: number;
+type Flight = {
+  id: string;
+  price?: number;
+  currency?: string;
+  airline?: string;
+  airlineCode?: string;
+  origin?: string;
+  destination?: string;
+  departureTime?: string;
+  arrivalTime?: string;
+  duration?: string;
+  stops?: number;
+  cabin?: string;
 };
+
+type ToolCall =
+  | { name: "search_hotels"; args: { destination: string; countryCode: string } }
+  | { name: "get_hotel_details"; args: { hotelId: string } }
+  | {
+      name: "search_flights";
+      args: {
+        origin: string;
+        destination: string;
+        departureDate: string;
+        returnDate?: string;
+        adults: number;
+      };
+    };
 
 type UserMessage = { id: string; role: "user"; content: string };
 type AssistantMessage = {
@@ -26,78 +56,203 @@ type AssistantMessage = {
   role: "assistant";
   status: "streaming" | "done" | "error";
   reasoning?: string;
-  toolCall?: { name: string; args: Parsed };
-  toolResult?: { parsed: Parsed; hotels: Hotel[] };
+  toolCall?: ToolCall;
+  toolResult?: { hotels?: Hotel[]; hotel?: Hotel; flights?: Flight[] };
   message?: string;
   error?: string;
 };
 type Message = UserMessage | AssistantMessage;
 
+type Chat = {
+  id: string;
+  title: string;
+  messages: Message[];
+  updatedAt: number;
+};
+
+type CartHotelItem = {
+  kind: "hotel";
+  id: string;
+  addedAt: number;
+  hotel: Hotel;
+};
+type CartFlightItem = {
+  kind: "flight";
+  id: string;
+  addedAt: number;
+  flight: Flight;
+};
+type CartItem = CartHotelItem | CartFlightItem;
+
+type ApiMessage = { role: "user" | "assistant"; content: string };
+
 const SUGGESTIONS = [
   "3 nights in Paris for 2 people in early June",
-  "Beach hotel in Bali for a week next month",
-  "Cheap stay in Tokyo, April, solo traveler",
-  "Family-friendly hotel in Rome, 5 days in July",
+  "Flights from NYC to Tokyo next month",
+  "Beach hotel in Bali for a week",
+  "Hotels in Rome for 5 days in July",
 ];
+
+const LS_CHATS = "duskgo.chats.v1";
+const LS_CURRENT = "duskgo.current.v1";
+const LS_CART = "duskgo.cart.v1";
 
 const uid = () =>
   typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 
-/* ----------------------------- icons ----------------------------- */
+/* ============================ icons =========================== */
 
-function ArrowUp(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <line x1="12" y1="19" x2="12" y2="5" />
-      <polyline points="5 12 12 5 19 12" />
-    </svg>
-  );
-}
-function Spinner(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="animate-spin" {...props}>
-      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-    </svg>
-  );
-}
-function SearchIcon(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <circle cx="11" cy="11" r="8" />
-      <path d="m21 21-4.3-4.3" />
-    </svg>
-  );
-}
-function Chevron(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
-  );
-}
-function Check(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <polyline points="20 6 9 17 4 12" />
-    </svg>
-  );
-}
+const svg = (props: React.SVGProps<SVGSVGElement>) => ({
+  xmlns: "http://www.w3.org/2000/svg",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 2,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  ...props,
+});
+const ArrowUp = (p: any) => (
+  <svg width="18" height="18" viewBox="0 0 24 24" {...svg(p)} strokeWidth={2.5}>
+    <line x1="12" y1="19" x2="12" y2="5" />
+    <polyline points="5 12 12 5 19 12" />
+  </svg>
+);
+const Spinner = (p: any) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" className="animate-spin" {...svg(p)} strokeWidth={2.5}>
+    <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+  </svg>
+);
+const SearchIcon = (p: any) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" {...svg(p)}>
+    <circle cx="11" cy="11" r="8" />
+    <path d="m21 21-4.3-4.3" />
+  </svg>
+);
+const Chevron = (p: any) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" {...svg(p)}>
+    <polyline points="9 18 15 12 9 6" />
+  </svg>
+);
+const Check = (p: any) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" {...svg(p)} strokeWidth={2.5}>
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+);
+const Plus = (p: any) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" {...svg(p)}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+const X = (p: any) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" {...svg(p)}>
+    <path d="M18 6L6 18M6 6l12 12" />
+  </svg>
+);
+const ShoppingBag = (p: any) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" {...svg(p)}>
+    <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0" />
+  </svg>
+);
+const Menu = (p: any) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" {...svg(p)}>
+    <line x1="3" y1="12" x2="21" y2="12" />
+    <line x1="3" y1="6" x2="21" y2="6" />
+    <line x1="3" y1="18" x2="21" y2="18" />
+  </svg>
+);
+const Plane = (p: any) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" {...svg(p)}>
+    <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z" />
+  </svg>
+);
+const Bed = (p: any) => (
+  <svg width="14" height="14" viewBox="0 0 24 24" {...svg(p)}>
+    <path d="M2 4v16M22 8v12M2 20h20M2 14h20M10 14v-4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v4" />
+  </svg>
+);
+const Star = (p: any) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="12"
+    height="12"
+    viewBox="0 0 24 24"
+    fill="currentColor"
+    stroke="none"
+    {...p}
+  >
+    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+  </svg>
+);
 
-/* ------------------------ assistant message ---------------------- */
+/* ============================ utils =========================== */
 
 function formatDateRange(a?: string, b?: string) {
-  if (!a || !b) return "";
+  if (!a) return "";
   try {
-    const fmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
-    return `${fmt.format(new Date(a))} → ${fmt.format(new Date(b))}`;
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+    const first = fmt.format(new Date(a));
+    if (!b) return first;
+    return `${first} → ${fmt.format(new Date(b))}`;
   } catch {
-    return `${a} → ${b}`;
+    return b ? `${a} → ${b}` : a;
   }
 }
 
-function ReasoningSection({ text, streaming }: { text: string; streaming: boolean }) {
+function formatTime(iso?: string) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatPrice(amount?: number, currency?: string) {
+  if (amount == null) return "—";
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency || "USD",
+      maximumFractionDigits: 0,
+    }).format(amount);
+  } catch {
+    return `${amount} ${currency || ""}`.trim();
+  }
+}
+
+function loadLS<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function saveLS(key: string, val: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(key, JSON.stringify(val));
+  } catch {}
+}
+
+/* ===================== message sub-components ================ */
+
+function ReasoningSection({
+  text,
+  streaming,
+}: {
+  text: string;
+  streaming: boolean;
+}) {
   const [open, setOpen] = useState(true);
   useEffect(() => {
     if (!streaming) setOpen(false);
@@ -119,7 +274,9 @@ function ReasoningSection({ text, streaming }: { text: string; streaming: boolea
         </span>
         <span
           className={`text-xs font-medium ${
-            streaming ? "animate-pulse text-muted-foreground" : "text-foreground"
+            streaming
+              ? "animate-pulse text-muted-foreground"
+              : "text-foreground"
           }`}
         >
           {streaming ? "Thinking…" : "Thoughts"}
@@ -142,28 +299,60 @@ function ReasoningSection({ text, streaming }: { text: string; streaming: boolea
 }
 
 function ToolCallRow({
-  args,
-  resultCount,
+  call,
   status,
+  resultCount,
 }: {
-  args: Parsed;
-  resultCount?: number;
+  call: ToolCall;
   status: "running" | "done" | "error";
+  resultCount?: number;
 }) {
+  let icon: React.ReactNode;
+  let label: React.ReactNode;
+  if (call.name === "search_hotels") {
+    icon = <Bed />;
+    label = (
+      <>
+        <span className="font-medium">search_hotels</span>
+        <span className="truncate text-muted-foreground">
+          {call.args.destination}, {call.args.countryCode}
+        </span>
+      </>
+    );
+  } else if (call.name === "get_hotel_details") {
+    icon = <SearchIcon />;
+    label = (
+      <>
+        <span className="font-medium">get_hotel_details</span>
+        <span className="truncate text-muted-foreground">
+          {call.args.hotelId}
+        </span>
+      </>
+    );
+  } else {
+    icon = <Plane />;
+    label = (
+      <>
+        <span className="font-medium">search_flights</span>
+        <span className="truncate text-muted-foreground">
+          {call.args.origin} → {call.args.destination} ·{" "}
+          {formatDateRange(call.args.departureDate, call.args.returnDate)}
+        </span>
+      </>
+    );
+  }
+
   return (
     <div className="flex items-center gap-2 text-xs">
       <span className="flex size-4 items-center justify-center text-muted-foreground">
-        <SearchIcon />
+        {icon}
       </span>
-      <span className="font-medium">search_hotels</span>
-      <span className="truncate text-muted-foreground">
-        {args.destination}, {args.countryCode} · {formatDateRange(args.checkIn, args.checkOut)}
-      </span>
+      {label}
       <span className="ml-auto flex items-center gap-1.5">
         {status === "running" && (
           <>
             <Spinner />
-            <span className="text-muted-foreground">Searching…</span>
+            <span className="text-muted-foreground">Working…</span>
           </>
         )}
         {status === "done" && (
@@ -180,35 +369,169 @@ function ToolCallRow({
   );
 }
 
-function HotelCard({ h }: { h: Hotel }) {
+function HotelCard({
+  h,
+  onOpen,
+  onAdd,
+  inCart,
+}: {
+  h: Hotel;
+  onOpen: () => void;
+  onAdd: () => void;
+  inCart: boolean;
+}) {
   return (
     <article className="group overflow-hidden rounded-xl border bg-card transition hover:shadow-md">
-      {h.thumbnail ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={h.thumbnail}
-          alt={h.name}
-          className="h-40 w-full object-cover transition group-hover:scale-[1.02]"
-        />
-      ) : (
-        <div className="flex h-40 w-full items-center justify-center bg-muted text-xs text-muted-foreground">
-          No image
-        </div>
-      )}
-      <div className="p-4">
-        <h3 className="line-clamp-1 text-sm font-medium">{h.name}</h3>
-        <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
-          {[h.address, h.city, h.country].filter(Boolean).join(", ") || "—"}
-        </p>
-        {typeof h.rating === "number" && (
-          <p className="mt-2 text-xs font-medium">★ {h.rating.toFixed(1)}</p>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="block w-full text-left"
+      >
+        {h.thumbnail ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={h.thumbnail}
+            alt={h.name}
+            className="h-40 w-full object-cover transition group-hover:scale-[1.02]"
+          />
+        ) : (
+          <div className="flex h-40 w-full items-center justify-center bg-muted text-xs text-muted-foreground">
+            No image
+          </div>
         )}
+        <div className="p-4 pb-2">
+          <div className="flex items-start justify-between gap-2">
+            <h3 className="line-clamp-1 flex-1 text-sm font-medium">
+              {h.name}
+            </h3>
+            {typeof h.stars === "number" && h.stars > 0 && (
+              <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
+                {Array.from({ length: Math.round(h.stars) }).map((_, i) => (
+                  <Star key={i} className="text-amber-400" />
+                ))}
+              </span>
+            )}
+          </div>
+          <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+            {[h.address, h.city, h.country].filter(Boolean).join(", ") || "—"}
+          </p>
+          {typeof h.rating === "number" && (
+            <p className="mt-2 text-xs font-medium">
+              ★ {h.rating.toFixed(1)}
+              {h.reviewCount ? (
+                <span className="ml-1 font-normal text-muted-foreground">
+                  ({h.reviewCount.toLocaleString()} reviews)
+                </span>
+              ) : null}
+            </p>
+          )}
+        </div>
+      </button>
+      <div className="flex items-center justify-between gap-2 border-t px-4 py-2">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          Details
+        </button>
+        <button
+          type="button"
+          onClick={onAdd}
+          disabled={inCart}
+          className="flex items-center gap-1 rounded-full border bg-background px-2.5 py-1 text-xs transition hover:bg-muted disabled:opacity-50"
+        >
+          {inCart ? (
+            <>
+              <Check className="text-green-500" /> In cart
+            </>
+          ) : (
+            <>
+              <Plus /> Add
+            </>
+          )}
+        </button>
       </div>
     </article>
   );
 }
 
-function AssistantMessageView({ msg }: { msg: AssistantMessage }) {
+function FlightCard({
+  f,
+  onAdd,
+  inCart,
+}: {
+  f: Flight;
+  onAdd: () => void;
+  inCart: boolean;
+}) {
+  return (
+    <article className="rounded-xl border bg-card p-4 transition hover:shadow-md">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Plane className="text-muted-foreground" />
+            {f.airline || f.airlineCode || "Flight"}
+            {f.stops != null && (
+              <span className="text-xs font-normal text-muted-foreground">
+                · {f.stops === 0 ? "Nonstop" : `${f.stops} stop${f.stops > 1 ? "s" : ""}`}
+              </span>
+            )}
+          </div>
+          <div className="mt-2 flex items-center gap-3 text-sm">
+            <div>
+              <div className="font-semibold">{formatTime(f.departureTime)}</div>
+              <div className="text-xs text-muted-foreground">{f.origin || "—"}</div>
+            </div>
+            <div className="flex-1 border-t border-dashed" />
+            <div>
+              <div className="font-semibold">{formatTime(f.arrivalTime)}</div>
+              <div className="text-xs text-muted-foreground">{f.destination || "—"}</div>
+            </div>
+          </div>
+          {f.cabin && (
+            <div className="mt-2 text-xs text-muted-foreground">{f.cabin}</div>
+          )}
+        </div>
+        <div className="text-right">
+          <div className="text-lg font-semibold">
+            {formatPrice(f.price, f.currency)}
+          </div>
+          <button
+            type="button"
+            onClick={onAdd}
+            disabled={inCart}
+            className="mt-2 flex items-center gap-1 rounded-full border bg-background px-2.5 py-1 text-xs transition hover:bg-muted disabled:opacity-50"
+          >
+            {inCart ? (
+              <>
+                <Check className="text-green-500" /> In cart
+              </>
+            ) : (
+              <>
+                <Plus /> Add
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function AssistantMessageView({
+  msg,
+  cart,
+  onAddHotel,
+  onAddFlight,
+  onOpenHotel,
+}: {
+  msg: AssistantMessage;
+  cart: CartItem[];
+  onAddHotel: (h: Hotel) => void;
+  onAddFlight: (f: Flight) => void;
+  onOpenHotel: (h: Hotel) => void;
+}) {
   const streaming = msg.status === "streaming";
   const toolStatus: "running" | "done" | "error" = msg.error
     ? "error"
@@ -216,24 +539,50 @@ function AssistantMessageView({ msg }: { msg: AssistantMessage }) {
     ? "done"
     : "running";
 
+  const cartIds = useMemo(() => new Set(cart.map((c) => c.id)), [cart]);
+  const count =
+    msg.toolResult?.hotels?.length ?? msg.toolResult?.flights?.length ?? 0;
+
   return (
     <div className="space-y-4">
       {msg.reasoning && (
-        <ReasoningSection text={msg.reasoning} streaming={streaming && !msg.toolResult} />
+        <ReasoningSection
+          text={msg.reasoning}
+          streaming={streaming && !msg.toolResult}
+        />
       )}
 
       {msg.toolCall && (
         <ToolCallRow
-          args={msg.toolCall.args}
-          resultCount={msg.toolResult?.hotels.length}
+          call={msg.toolCall}
           status={toolStatus}
+          resultCount={count}
         />
       )}
 
-      {msg.toolResult && msg.toolResult.hotels.length > 0 && (
+      {msg.toolResult?.hotels && msg.toolResult.hotels.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2">
           {msg.toolResult.hotels.map((h) => (
-            <HotelCard key={h.id} h={h} />
+            <HotelCard
+              key={h.id}
+              h={h}
+              onOpen={() => onOpenHotel(h)}
+              onAdd={() => onAddHotel(h)}
+              inCart={cartIds.has(h.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {msg.toolResult?.flights && msg.toolResult.flights.length > 0 && (
+        <div className="space-y-3">
+          {msg.toolResult.flights.map((f) => (
+            <FlightCard
+              key={f.id}
+              f={f}
+              onAdd={() => onAddFlight(f)}
+              inCart={cartIds.has(f.id)}
+            />
           ))}
         </div>
       )}
@@ -258,28 +607,459 @@ function AssistantMessageView({ msg }: { msg: AssistantMessage }) {
   );
 }
 
-/* -------------------------------- page ------------------------------- */
+/* ============================= sheets ========================= */
+
+function Sheet({
+  open,
+  onClose,
+  side,
+  children,
+  title,
+}: {
+  open: boolean;
+  onClose: () => void;
+  side: "left" | "right";
+  children: React.ReactNode;
+  title: string;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50">
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div
+        className={`absolute top-0 ${
+          side === "right" ? "right-0" : "left-0"
+        } flex h-full w-full max-w-md flex-col border bg-background shadow-2xl`}
+      >
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <h2 className="text-sm font-semibold">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-muted"
+          >
+            <X />
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function HotelDetailSheet({
+  hotel,
+  onClose,
+  onAdd,
+  inCart,
+}: {
+  hotel: Hotel | null;
+  onClose: () => void;
+  onAdd: (h: Hotel) => void;
+  inCart: boolean;
+}) {
+  return (
+    <Sheet
+      open={!!hotel}
+      onClose={onClose}
+      side="right"
+      title="Hotel details"
+    >
+      {hotel && (
+        <div>
+          {hotel.mainPhoto && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={hotel.mainPhoto}
+              alt={hotel.name}
+              className="h-56 w-full object-cover"
+            />
+          )}
+          <div className="space-y-4 p-4">
+            <div>
+              <h3 className="text-lg font-semibold">{hotel.name}</h3>
+              <p className="text-xs text-muted-foreground">
+                {[hotel.address, hotel.city, hotel.country]
+                  .filter(Boolean)
+                  .join(", ")}
+              </p>
+              <div className="mt-2 flex items-center gap-3 text-xs">
+                {typeof hotel.stars === "number" && (
+                  <span className="flex items-center gap-0.5">
+                    {Array.from({ length: Math.round(hotel.stars) }).map(
+                      (_, i) => (
+                        <Star key={i} className="text-amber-400" />
+                      )
+                    )}
+                  </span>
+                )}
+                {typeof hotel.rating === "number" && (
+                  <span className="font-medium">
+                    ★ {hotel.rating.toFixed(1)}
+                    {hotel.reviewCount ? (
+                      <span className="ml-1 font-normal text-muted-foreground">
+                        ({hotel.reviewCount.toLocaleString()})
+                      </span>
+                    ) : null}
+                  </span>
+                )}
+              </div>
+            </div>
+            {hotel.description && (
+              <p className="text-sm leading-relaxed text-muted-foreground">
+                {hotel.description}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => onAdd(hotel)}
+              disabled={inCart}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary py-3 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
+            >
+              {inCart ? (
+                <>
+                  <Check /> Added to cart
+                </>
+              ) : (
+                <>
+                  <Plus /> Add to cart
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+function CartSheet({
+  open,
+  onClose,
+  cart,
+  onRemove,
+}: {
+  open: boolean;
+  onClose: () => void;
+  cart: CartItem[];
+  onRemove: (id: string) => void;
+}) {
+  const total = cart.reduce((sum, c) => {
+    if (c.kind === "flight" && typeof c.flight.price === "number")
+      return sum + c.flight.price;
+    return sum;
+  }, 0);
+
+  return (
+    <Sheet open={open} onClose={onClose} side="right" title={`Cart (${cart.length})`}>
+      {cart.length === 0 ? (
+        <div className="p-8 text-center text-sm text-muted-foreground">
+          Your cart is empty. Add hotels or flights from a search result.
+        </div>
+      ) : (
+        <div className="flex h-full flex-col">
+          <ul className="flex-1 divide-y">
+            {cart.map((item) => (
+              <li key={item.id} className="flex gap-3 p-4">
+                {item.kind === "hotel" ? (
+                  <>
+                    {item.hotel.thumbnail && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={item.hotel.thumbnail}
+                        alt={item.hotel.name}
+                        className="h-16 w-20 shrink-0 rounded-lg object-cover"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Bed />
+                        Hotel
+                      </div>
+                      <div className="truncate text-sm font-medium">
+                        {item.hotel.name}
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {item.hotel.city}, {item.hotel.country}
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex h-16 w-20 shrink-0 items-center justify-center rounded-lg bg-muted">
+                      <Plane />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Plane />
+                        Flight
+                      </div>
+                      <div className="truncate text-sm font-medium">
+                        {item.flight.origin} → {item.flight.destination}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {formatPrice(item.flight.price, item.flight.currency)}
+                      </div>
+                    </div>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onRemove(item.id)}
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label="Remove"
+                >
+                  <X />
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="border-t p-4">
+            {total > 0 && (
+              <div className="mb-3 flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Flights total</span>
+                <span className="font-semibold">{formatPrice(total, "USD")}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              className="w-full rounded-xl bg-primary py-3 text-sm font-medium text-primary-foreground transition hover:opacity-90"
+              onClick={() =>
+                alert("Checkout is a demo — wire up LiteAPI prebook/book next.")
+              }
+            >
+              Checkout
+            </button>
+          </div>
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+function HistorySheet({
+  open,
+  onClose,
+  chats,
+  currentId,
+  onSelect,
+  onNew,
+  onDelete,
+}: {
+  open: boolean;
+  onClose: () => void;
+  chats: Chat[];
+  currentId: string | null;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <Sheet open={open} onClose={onClose} side="left" title="Conversations">
+      <div className="p-3">
+        <button
+          type="button"
+          onClick={onNew}
+          className="flex w-full items-center justify-center gap-2 rounded-xl border bg-card py-2.5 text-sm font-medium hover:bg-muted"
+        >
+          <Plus /> New chat
+        </button>
+      </div>
+      {chats.length === 0 ? (
+        <div className="p-8 text-center text-sm text-muted-foreground">
+          No conversations yet.
+        </div>
+      ) : (
+        <ul className="divide-y">
+          {chats.map((c) => (
+            <li
+              key={c.id}
+              className={`group flex items-center gap-2 px-4 py-3 hover:bg-muted ${
+                c.id === currentId ? "bg-muted" : ""
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => onSelect(c.id)}
+                className="min-w-0 flex-1 text-left"
+              >
+                <div className="truncate text-sm">{c.title || "New chat"}</div>
+                <div className="text-xs text-muted-foreground">
+                  {new Date(c.updatedAt).toLocaleString()}
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (confirm("Delete this chat?")) onDelete(c.id);
+                }}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-0 transition hover:bg-background hover:text-foreground group-hover:opacity-100"
+                aria-label="Delete"
+              >
+                <X />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Sheet>
+  );
+}
+
+/* ============================ input ========================== */
+
+function InputCard({
+  query,
+  setQuery,
+  onKeyDown,
+  loading,
+  autosize,
+}: {
+  query: string;
+  setQuery: (v: string) => void;
+  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  loading: boolean;
+  autosize: (el: HTMLTextAreaElement) => void;
+}) {
+  return (
+    <div className="group relative rounded-3xl border bg-card shadow-sm transition focus-within:border-foreground/40 focus-within:shadow-md">
+      <textarea
+        value={query}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          autosize(e.currentTarget);
+        }}
+        onKeyDown={onKeyDown}
+        placeholder="Ask for hotels, flights, or a whole trip…"
+        rows={1}
+        className="block w-full resize-none rounded-3xl bg-transparent px-5 py-4 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none"
+      />
+      <button
+        type="submit"
+        disabled={loading || !query.trim()}
+        aria-label="Send"
+        className="absolute bottom-2.5 right-2.5 flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
+      >
+        {loading ? <Spinner /> : <ArrowUp />}
+      </button>
+    </div>
+  );
+}
+
+/* ============================== page ========================== */
 
 export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [cart, setCart] = useState<CartItem[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
+  const [cartOpen, setCartOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [detailHotel, setDetailHotel] = useState<Hotel | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // hydrate from localStorage on mount
+  useEffect(() => {
+    setChats(loadLS<Chat[]>(LS_CHATS, []));
+    setCurrentId(loadLS<string | null>(LS_CURRENT, null));
+    setCart(loadLS<CartItem[]>(LS_CART, []));
+  }, []);
+
+  useEffect(() => {
+    saveLS(LS_CHATS, chats);
+  }, [chats]);
+  useEffect(() => {
+    saveLS(LS_CURRENT, currentId);
+  }, [currentId]);
+  useEffect(() => {
+    saveLS(LS_CART, cart);
+  }, [cart]);
+
+  const currentChat = useMemo(
+    () => chats.find((c) => c.id === currentId) || null,
+    [chats, currentId]
+  );
+  const messages = currentChat?.messages ?? [];
+  const hasMessages = messages.length > 0;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages]);
+  }, [messages.length, loading]);
+
+  function updateCurrent(mutator: (m: Message[]) => Message[]) {
+    setChats((prev) => {
+      const next = [...prev];
+      const idx = next.findIndex((c) => c.id === currentId);
+      if (idx === -1) return prev;
+      next[idx] = {
+        ...next[idx],
+        messages: mutator(next[idx].messages),
+        updatedAt: Date.now(),
+      };
+      return next;
+    });
+  }
+
+  function startNewChat(): string {
+    const id = uid();
+    const chat: Chat = {
+      id,
+      title: "New chat",
+      messages: [],
+      updatedAt: Date.now(),
+    };
+    setChats((prev) => [chat, ...prev]);
+    setCurrentId(id);
+    return id;
+  }
+
+  function deleteChat(id: string) {
+    setChats((prev) => prev.filter((c) => c.id !== id));
+    if (currentId === id) setCurrentId(null);
+  }
 
   async function runChat(content: string) {
     if (!content.trim() || loading) return;
 
-    const userMsg: UserMessage = { id: uid(), role: "user", content: content.trim() };
+    let chatId = currentId;
+    if (!chatId) chatId = startNewChat();
+
+    const userMsg: UserMessage = {
+      id: uid(),
+      role: "user",
+      content: content.trim(),
+    };
     const assistantMsg: AssistantMessage = {
       id: uid(),
       role: "assistant",
       status: "streaming",
     };
-    const history: ChatApiMessage[] = [...messages, userMsg].map((m) =>
+
+    setChats((prev) => {
+      const next = [...prev];
+      const idx = next.findIndex((c) => c.id === chatId);
+      if (idx === -1) return prev;
+      const chat = next[idx];
+      next[idx] = {
+        ...chat,
+        title:
+          chat.messages.length === 0
+            ? content.trim().slice(0, 60)
+            : chat.title,
+        messages: [...chat.messages, userMsg, assistantMsg],
+        updatedAt: Date.now(),
+      };
+      return next;
+    });
+    setQuery("");
+    setLoading(true);
+
+    const history: ApiMessage[] = [...messages, userMsg].map((m) =>
       m.role === "user"
         ? { role: "user", content: m.content }
         : {
@@ -291,14 +1071,20 @@ export default function Home() {
           }
     );
 
-    setMessages((prev) => [...prev, userMsg, assistantMsg]);
-    setQuery("");
-    setLoading(true);
-
     const patch = (fn: (a: AssistantMessage) => AssistantMessage) => {
-      setMessages((prev) =>
-        prev.map((m) => (m.id === assistantMsg.id && m.role === "assistant" ? fn(m) : m))
-      );
+      setChats((prev) => {
+        const next = [...prev];
+        const idx = next.findIndex((c) => c.id === chatId);
+        if (idx === -1) return prev;
+        next[idx] = {
+          ...next[idx],
+          messages: next[idx].messages.map((m) =>
+            m.id === assistantMsg.id && m.role === "assistant" ? fn(m) : m
+          ),
+          updatedAt: Date.now(),
+        };
+        return next;
+      });
     };
 
     try {
@@ -312,7 +1098,6 @@ export default function Home() {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -328,23 +1113,29 @@ export default function Home() {
             continue;
           }
           switch (evt.type) {
-            case "status":
-              break;
             case "reasoning":
               patch((a) => ({ ...a, reasoning: evt.text }));
               break;
             case "tool_call":
               patch((a) => ({
                 ...a,
-                toolCall: { name: evt.name, args: evt.args },
+                toolCall: { name: evt.name, args: evt.args } as ToolCall,
               }));
               break;
-            case "tool_result":
+            case "tool_result": {
+              const name = evt.name as ToolCall["name"];
+              const result = evt.result;
               patch((a) => ({
                 ...a,
-                toolResult: { parsed: evt.parsed, hotels: evt.hotels },
+                toolResult:
+                  name === "search_hotels"
+                    ? { hotels: result }
+                    : name === "get_hotel_details"
+                    ? { hotel: result, hotels: [result] }
+                    : { flights: result },
               }));
               break;
+            }
             case "message":
               patch((a) => ({ ...a, message: evt.text }));
               break;
@@ -352,62 +1143,99 @@ export default function Home() {
               patch((a) => ({ ...a, status: "done" }));
               break;
             case "error":
-              patch((a) => ({ ...a, status: "error", error: evt.text }));
+              patch((a) => ({
+                ...a,
+                status: "error",
+                error: evt.text,
+              }));
               break;
           }
         }
       }
     } catch (err: any) {
-      patch((a) => ({ ...a, status: "error", error: err?.message || "Request failed" }));
+      patch((a) => ({
+        ...a,
+        status: "error",
+        error: err?.message || "Request failed",
+      }));
     } finally {
       setLoading(false);
     }
+  }
+
+  function addHotelToCart(h: Hotel) {
+    setCart((prev) =>
+      prev.some((c) => c.id === h.id)
+        ? prev
+        : [{ kind: "hotel", id: h.id, addedAt: Date.now(), hotel: h }, ...prev]
+    );
+  }
+  function addFlightToCart(f: Flight) {
+    setCart((prev) =>
+      prev.some((c) => c.id === f.id)
+        ? prev
+        : [{ kind: "flight", id: f.id, addedAt: Date.now(), flight: f }, ...prev]
+    );
+  }
+  function removeFromCart(id: string) {
+    setCart((prev) => prev.filter((c) => c.id !== id));
   }
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     runChat(query);
   }
-
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       onSubmit(e as any);
     }
   }
-
   function autosize(el: HTMLTextAreaElement) {
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   }
 
-  const hasMessages = messages.length > 0;
-
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col px-4">
       <header className="flex items-center justify-between py-5">
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setHistoryOpen(true)}
+            className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Conversations"
+          >
+            <Menu />
+          </button>
           <div className="h-6 w-6 rounded-md bg-foreground" />
           <span className="text-sm font-semibold tracking-tight">Duskgo</span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {hasMessages && (
             <button
               type="button"
-              onClick={() => setMessages([])}
-              className="text-xs text-muted-foreground transition hover:text-foreground"
+              onClick={() => {
+                startNewChat();
+              }}
+              className="hidden rounded-full px-3 py-1.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground sm:block"
             >
               New chat
             </button>
           )}
-          <a
-            href="https://github.com/LSDWor/Duskgo"
-            className="text-xs text-muted-foreground transition hover:text-foreground"
-            target="_blank"
-            rel="noopener noreferrer"
+          <button
+            type="button"
+            onClick={() => setCartOpen(true)}
+            className="relative flex h-8 items-center gap-1.5 rounded-full border bg-card px-3 text-xs font-medium transition hover:bg-muted"
           >
-            GitHub
-          </a>
+            <ShoppingBag />
+            Cart
+            {cart.length > 0 && (
+              <span className="ml-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                {cart.length}
+              </span>
+            )}
+          </button>
         </div>
       </header>
 
@@ -418,7 +1246,8 @@ export default function Home() {
               Where to next?
             </h1>
             <p className="mt-3 text-sm text-muted-foreground md:text-base">
-              Describe your trip. Duskgo thinks it through and finds real hotels.
+              Describe your trip. Duskgo searches hotels, flights, and details
+              via the LiteAPI MCP server.
             </p>
           </div>
 
@@ -446,7 +1275,8 @@ export default function Home() {
           </div>
 
           <footer className="mt-12 text-center text-xs text-muted-foreground">
-            Hotels via LiteAPI · Reasoning via OpenRouter
+            Hotels · Flights · Details via{" "}
+            <span className="font-medium">LiteAPI MCP</span>
           </footer>
         </section>
       )}
@@ -463,7 +1293,14 @@ export default function Home() {
                     </div>
                   </div>
                 ) : (
-                  <AssistantMessageView key={m.id} msg={m} />
+                  <AssistantMessageView
+                    key={m.id}
+                    msg={m}
+                    cart={cart}
+                    onAddHotel={addHotelToCart}
+                    onAddFlight={addFlightToCart}
+                    onOpenHotel={setDetailHotel}
+                  />
                 )
               )}
               <div ref={bottomRef} />
@@ -483,46 +1320,36 @@ export default function Home() {
           </div>
         </>
       )}
+
+      <HistorySheet
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        chats={chats}
+        currentId={currentId}
+        onSelect={(id) => {
+          setCurrentId(id);
+          setHistoryOpen(false);
+        }}
+        onNew={() => {
+          startNewChat();
+          setHistoryOpen(false);
+        }}
+        onDelete={deleteChat}
+      />
+      <CartSheet
+        open={cartOpen}
+        onClose={() => setCartOpen(false)}
+        cart={cart}
+        onRemove={removeFromCart}
+      />
+      <HotelDetailSheet
+        hotel={detailHotel}
+        onClose={() => setDetailHotel(null)}
+        onAdd={(h) => {
+          addHotelToCart(h);
+        }}
+        inCart={!!detailHotel && cart.some((c) => c.id === detailHotel.id)}
+      />
     </main>
   );
 }
-
-function InputCard({
-  query,
-  setQuery,
-  onKeyDown,
-  loading,
-  autosize,
-}: {
-  query: string;
-  setQuery: (v: string) => void;
-  onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  loading: boolean;
-  autosize: (el: HTMLTextAreaElement) => void;
-}) {
-  return (
-    <div className="group relative rounded-3xl border bg-card shadow-sm transition focus-within:border-foreground/40 focus-within:shadow-md">
-      <textarea
-        value={query}
-        onChange={(e) => {
-          setQuery(e.target.value);
-          autosize(e.currentTarget);
-        }}
-        onKeyDown={onKeyDown}
-        placeholder="Ask for hotels anywhere…"
-        rows={1}
-        className="block w-full resize-none rounded-3xl bg-transparent px-5 py-4 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none"
-      />
-      <button
-        type="submit"
-        disabled={loading || !query.trim()}
-        aria-label="Send"
-        className="absolute bottom-2.5 right-2.5 flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground transition hover:opacity-90 disabled:opacity-40"
-      >
-        {loading ? <Spinner /> : <ArrowUp />}
-      </button>
-    </div>
-  );
-}
-
-type ChatApiMessage = { role: "user" | "assistant"; content: string };
