@@ -365,9 +365,9 @@ function buildSystemPrompt(pinned?: PinnedHotel[]) {
 
 Available tools:
 
-1. respond — Answer the user directly with natural-language text. Use this when the user is asking a question, comparing pinned hotels, seeking advice, or the answer can be composed from conversation context without a fresh data lookup. This is the DEFAULT when the user has pinned hotels and is asking about them.
+1. respond — Answer the user directly with natural-language text. Use this when the user is asking a question, comparing pinned hotels, requesting hotel details they've pinned, seeking advice, or the answer can be composed from conversation context without a fresh data lookup. This is the DEFAULT when the user has pinned hotels and is asking about them.
    arguments: {
-     text: string              // the answer, 1-4 short paragraphs, can use markdown-ish bullets
+     text: string              // Markdown. Structure answers with short headings or **bold labels**, concise bullet lists (- ...), and 1–2 sentence paragraphs. Always include concrete facts from the pinned context (location, star rating, review score, standout features). Avoid generic filler. For "tell me about <hotel>" prompts, structure as: 1-sentence headline, then bullets covering Vibe, Best for, Standout features, and any caveats from cons.
    }
 
 2. search_hotels — Search hotels in a city. Use when the user asks about hotels, stays, or a place to stay and wants NEW options.

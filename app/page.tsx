@@ -253,6 +253,140 @@ function formatPrice(amount?: number, currency?: string) {
   }
 }
 
+/* --------------------- tiny markdown renderer -------------------- */
+
+function renderInline(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  // Split on bold/italic/code tokens while preserving them.
+  const regex = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]]+\]\([^)]+\))/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = regex.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const token = m[0];
+    if (token.startsWith("**")) {
+      parts.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith("*")) {
+      parts.push(<em key={key++}>{token.slice(1, -1)}</em>);
+    } else if (token.startsWith("`")) {
+      parts.push(
+        <code
+          key={key++}
+          className="rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]"
+        >
+          {token.slice(1, -1)}
+        </code>
+      );
+    } else if (token.startsWith("[")) {
+      const match = token.match(/\[([^\]]+)\]\(([^)]+)\)/)!;
+      parts.push(
+        <a
+          key={key++}
+          href={match[2]}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2 hover:no-underline"
+        >
+          {match[1]}
+        </a>
+      );
+    }
+    last = m.index + token.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
+function renderMarkdown(text: string): React.ReactNode[] {
+  if (!text) return [];
+  const blocks = text.replace(/\r\n/g, "\n").split(/\n{2,}/);
+  const out: React.ReactNode[] = [];
+
+  blocks.forEach((block, bIdx) => {
+    const lines = block.split("\n");
+
+    // Bullet list: every non-empty line starts with - or *
+    if (
+      lines.length > 0 &&
+      lines.every((l) => l.trim() === "" || /^\s*[-*]\s+/.test(l))
+    ) {
+      const items = lines
+        .filter((l) => l.trim() !== "")
+        .map((l) => l.replace(/^\s*[-*]\s+/, ""));
+      if (items.length > 0) {
+        out.push(
+          <ul
+            key={bIdx}
+            className="my-1 list-disc space-y-1 pl-5 marker:text-muted-foreground"
+          >
+            {items.map((it, i) => (
+              <li key={i}>{renderInline(it)}</li>
+            ))}
+          </ul>
+        );
+        return;
+      }
+    }
+
+    // Numbered list
+    if (
+      lines.length > 0 &&
+      lines.every((l) => l.trim() === "" || /^\s*\d+[.)]\s+/.test(l))
+    ) {
+      const items = lines
+        .filter((l) => l.trim() !== "")
+        .map((l) => l.replace(/^\s*\d+[.)]\s+/, ""));
+      if (items.length > 0) {
+        out.push(
+          <ol
+            key={bIdx}
+            className="my-1 list-decimal space-y-1 pl-5 marker:text-muted-foreground"
+          >
+            {items.map((it, i) => (
+              <li key={i}>{renderInline(it)}</li>
+            ))}
+          </ol>
+        );
+        return;
+      }
+    }
+
+    // Heading
+    const hMatch = block.match(/^(#{1,3})\s+(.*)/);
+    if (hMatch && lines.length === 1) {
+      const level = hMatch[1].length;
+      const content = hMatch[2];
+      const cls =
+        level === 1
+          ? "text-lg font-semibold"
+          : level === 2
+          ? "text-base font-semibold"
+          : "text-sm font-semibold";
+      out.push(
+        <p key={bIdx} className={cls}>
+          {renderInline(content)}
+        </p>
+      );
+      return;
+    }
+
+    // Paragraph — handle soft line breaks
+    const frags: React.ReactNode[] = [];
+    lines.forEach((l, i) => {
+      if (i > 0) frags.push(<br key={`br-${i}`} />);
+      frags.push(...renderInline(l));
+    });
+    out.push(
+      <p key={bIdx} className="leading-relaxed">
+        {frags}
+      </p>
+    );
+  });
+
+  return out;
+}
+
 function loadLS<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   try {
@@ -752,9 +886,9 @@ function AssistantMessageView({
       )}
 
       {msg.message && (
-        <p className="animate-fade-in whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-          {msg.message}
-        </p>
+        <div className="animate-fade-in space-y-3 text-sm leading-relaxed text-foreground">
+          {renderMarkdown(msg.message)}
+        </div>
       )}
 
       {msg.error && (
@@ -1000,37 +1134,35 @@ function HotelDetailModal({
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto pb-28">
-        {/* Hero image */}
-        {heroImage ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            key={heroImage}
-            src={heroImage}
-            alt={h.name}
-            className="h-[40vh] max-h-[520px] w-full animate-fade-in object-cover"
-          />
-        ) : (
-          <div className="flex h-[30vh] w-full items-center justify-center bg-muted text-sm text-muted-foreground">
-            {loading ? (
-              <div className="skeleton h-full w-full" />
-            ) : (
-              "No image available"
-            )}
-          </div>
-        )}
-
-        {/* Image counter pill */}
-        {h.images.length > 1 && (
-          <div className="pointer-events-none absolute left-1/2 top-[calc(40vh+0.75rem)] z-10 -translate-x-1/2 sm:top-[calc(40vh+0.75rem)]">
-            <span className="rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
+        {/* Hero image with in-image counter */}
+        <div className="relative">
+          {heroImage ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={heroImage}
+              src={heroImage}
+              alt={h.name}
+              className="h-[40vh] max-h-[520px] w-full animate-fade-in object-cover"
+            />
+          ) : (
+            <div className="flex h-[30vh] w-full items-center justify-center bg-muted text-sm text-muted-foreground">
+              {loading ? (
+                <div className="skeleton h-full w-full" />
+              ) : (
+                "No image available"
+              )}
+            </div>
+          )}
+          {h.images.length > 1 && (
+            <span className="pointer-events-none absolute bottom-3 left-3 rounded-full bg-black/60 px-2.5 py-1 text-[11px] font-medium text-white backdrop-blur">
               {activeImage + 1} / {h.images.length}
             </span>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Image gallery strip */}
         {h.images.length > 1 && (
-          <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pt-3">
+          <div className="no-scrollbar flex gap-2 overflow-x-auto px-4 pb-3 pt-3">
             {h.images.slice(0, 12).map((img, i) => (
               <button
                 key={i}
@@ -1798,7 +1930,7 @@ export default function Home() {
     );
     setDetailHotel(null);
     runChat(
-      `Tell me about ${h.name} — its vibe, what it's known for, who it's best for, and any standout features. Keep it concise.`,
+      `Give me a detailed rundown of ${h.name}. Structure the answer with a short headline, then bullets for: **Vibe**, **Best for**, **Standout features**, and **Things to note**. Use concrete facts from the pinned context.`,
       [h]
     );
   }
