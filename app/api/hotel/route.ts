@@ -84,6 +84,7 @@ type Room = {
   boardName?: string;
   offerId?: string;
   refundable?: boolean;
+  cancellationPolicy?: string;
 };
 
 function normalizeRooms(rates: any, hotelRooms: any[] = []): Room[] {
@@ -142,6 +143,21 @@ function normalizeRooms(rates: any, hotelRooms: any[] = []): Room[] {
               (p: any) => (p?.amount ?? 0) === 0
             )
           : undefined,
+      cancellationPolicy: (() => {
+        const infos = rate.cancellationPolicies?.cancelPolicyInfos;
+        if (!Array.isArray(infos) || infos.length === 0) return undefined;
+        const free = infos.find((p: any) => (p?.amount ?? 0) === 0);
+        if (free?.cancelTime) {
+          try {
+            const d = new Date(free.cancelTime);
+            return `Free cancellation until ${d.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+            })}`;
+          } catch {}
+        }
+        return undefined;
+      })(),
     });
   }
 

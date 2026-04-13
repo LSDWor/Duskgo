@@ -164,7 +164,18 @@ type UserProfile = {
   firstName: string;
   lastName: string;
   email: string;
+  voucherCode?: string;
 };
+
+type Occupancy = {
+  adults: number;
+  children: number[];
+};
+
+const LS_CURRENCY = "duskgo.currency.v1";
+const LS_OCCUPANCY = "duskgo.occupancy.v1";
+const LS_DATES = "duskgo.dates.v1";
+const CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "SGD", "MXN", "INR"] as const;
 
 const uid = () =>
   typeof crypto !== "undefined" && crypto.randomUUID
@@ -1439,6 +1450,7 @@ type Room = {
   boardName?: string;
   offerId?: string;
   refundable?: boolean;
+  cancellationPolicy?: string;
 };
 
 type WeatherDay = {
@@ -2013,11 +2025,12 @@ function HotelDetailModal({
 
 const WL_DOMAIN = process.env.NEXT_PUBLIC_WL_DOMAIN || "";
 
-function buildBookingUrl(offerId: string, currency = "USD") {
+function buildBookingUrl(offerId: string, currency?: string) {
   if (!WL_DOMAIN) return null;
+  const cur = currency || loadLS<string>(LS_CURRENCY, "USD");
   const url = new URL(`https://${WL_DOMAIN}/booking`);
   url.searchParams.set("offerId", offerId);
-  url.searchParams.set("currency", currency);
+  url.searchParams.set("currency", cur);
   url.searchParams.set("language", "en");
   const p = loadLS<UserProfile | null>(LS_PROFILE, null);
   if (p?.email) {
@@ -2097,6 +2110,11 @@ function RoomRow({
                   Non-refundable
                 </span>
               ))}
+            {room.cancellationPolicy && (
+              <span className="text-[10px] text-muted-foreground">
+                {room.cancellationPolicy}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-2">
@@ -2179,6 +2197,7 @@ function ProfileModal({
 }) {
   const [first, setFirst] = useState(profile?.firstName || "");
   const [last, setLast] = useState(profile?.lastName || "");
+  const [voucher, setVoucher] = useState(profile?.voucherCode || "");
   const [loyalty, setLoyalty] = useState<any>(null);
   const [email, setEmail] = useState(profile?.email || "");
 
@@ -2187,6 +2206,7 @@ function ProfileModal({
       setFirst(profile?.firstName || "");
       setLast(profile?.lastName || "");
       setEmail(profile?.email || "");
+      setVoucher(profile?.voucherCode || "");
       if (profile?.email) {
         fetch(`/api/loyalty?email=${encodeURIComponent(profile.email)}`)
           .then((r) => r.json())
@@ -2301,6 +2321,18 @@ function ProfileModal({
               placeholder="john@example.com"
             />
           </div>
+          <div>
+            <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Promo code <span className="font-normal">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={voucher}
+              onChange={(e) => setVoucher(e.target.value.toUpperCase())}
+              className="w-full rounded-xl border bg-card px-3.5 py-2.5 font-mono text-sm uppercase outline-none focus:ring-2 focus:ring-ring"
+              placeholder="SUMMER10"
+            />
+          </div>
         </div>
 
         <div className="mt-8 space-y-3">
@@ -2312,6 +2344,7 @@ function ProfileModal({
                 firstName: first.trim(),
                 lastName: last.trim(),
                 email: email.trim(),
+                voucherCode: voucher.trim() || undefined,
               });
               onClose();
             }}
@@ -3024,13 +3057,36 @@ type InputCardProps = {
   placeholder?: string;
   mode: "research" | "booking";
   onToggleMode: () => void;
+  currency: string;
+  onCurrencyChange: (c: string) => void;
+  occupancy: Occupancy;
+  onOccupancyChange: (o: Occupancy) => void;
+  dates: { checkin: string; checkout: string } | null;
+  onDatesChange: (d: { checkin: string; checkout: string } | null) => void;
 };
 
 const InputCard = forwardRef<HTMLTextAreaElement, InputCardProps>(
   function InputCard(
-    { query, setQuery, onKeyDown, loading, autosize, placeholder, mode, onToggleMode },
+    {
+      query,
+      setQuery,
+      onKeyDown,
+      loading,
+      autosize,
+      placeholder,
+      mode,
+      onToggleMode,
+      currency,
+      onCurrencyChange,
+      occupancy,
+      onOccupancyChange,
+      dates,
+      onDatesChange,
+    },
     ref
   ) {
+    const [showOptions, setShowOptions] = useState(false);
+
     return (
       <div className="group relative rounded-3xl border bg-card shadow-sm transition focus-within:border-foreground/40 focus-within:shadow-md">
         <textarea
@@ -3045,18 +3101,35 @@ const InputCard = forwardRef<HTMLTextAreaElement, InputCardProps>(
           rows={1}
           className="block w-full resize-none rounded-3xl bg-transparent px-5 pb-12 pt-4 pr-14 text-[15px] leading-6 placeholder:text-muted-foreground focus:outline-none"
         />
-        <div className="absolute bottom-2.5 left-3 right-14 flex items-center gap-2">
+        <div className="absolute bottom-2.5 left-3 right-14 flex items-center gap-1.5 overflow-x-auto">
           <button
             type="button"
             onClick={onToggleMode}
-            className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+            className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
               mode === "research"
                 ? "bg-blue-500/15 text-blue-600 ring-1 ring-blue-500/30 dark:text-blue-400"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
           >
             <SearchIcon />
-            {mode === "research" ? "Research" : "Research"}
+            Research
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowOptions((v) => !v)}
+            className="flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          >
+            {occupancy.adults} adult{occupancy.adults !== 1 ? "s" : ""}
+            {occupancy.children.length > 0 &&
+              ` · ${occupancy.children.length} child`}
+            {dates
+              ? ` · ${dates.checkin.slice(5)}`
+              : ""}
+            {" · "}
+            {currency}
+            <Chevron
+              className={`transition-transform ${showOptions ? "rotate-90" : ""}`}
+            />
           </button>
         </div>
         <button
@@ -3067,6 +3140,148 @@ const InputCard = forwardRef<HTMLTextAreaElement, InputCardProps>(
         >
           {loading ? <Spinner /> : <ArrowUp />}
         </button>
+        {showOptions && (
+          <div className="animate-fade-in border-t px-4 pb-3 pt-2">
+            <div className="flex flex-wrap items-end gap-3">
+              {/* Occupancy */}
+              <div>
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Adults
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOccupancyChange({
+                        ...occupancy,
+                        adults: Math.max(1, occupancy.adults - 1),
+                      })
+                    }
+                    className="flex h-7 w-7 items-center justify-center rounded-full border text-xs hover:bg-muted"
+                  >
+                    −
+                  </button>
+                  <span className="w-5 text-center text-sm font-semibold tabular-nums">
+                    {occupancy.adults}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOccupancyChange({
+                        ...occupancy,
+                        adults: Math.min(9, occupancy.adults + 1),
+                      })
+                    }
+                    className="flex h-7 w-7 items-center justify-center rounded-full border text-xs hover:bg-muted"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Children
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOccupancyChange({
+                        ...occupancy,
+                        children: occupancy.children.slice(0, -1),
+                      })
+                    }
+                    className="flex h-7 w-7 items-center justify-center rounded-full border text-xs hover:bg-muted"
+                  >
+                    −
+                  </button>
+                  <span className="w-5 text-center text-sm font-semibold tabular-nums">
+                    {occupancy.children.length}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOccupancyChange({
+                        ...occupancy,
+                        children: [...occupancy.children, 8],
+                      })
+                    }
+                    className="flex h-7 w-7 items-center justify-center rounded-full border text-xs hover:bg-muted"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              {/* Dates */}
+              <div>
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Check-in
+                </label>
+                <input
+                  type="date"
+                  value={dates?.checkin || ""}
+                  onChange={(e) =>
+                    onDatesChange(
+                      e.target.value
+                        ? {
+                            checkin: e.target.value,
+                            checkout: dates?.checkout || "",
+                          }
+                        : null
+                    )
+                  }
+                  className="h-7 rounded-lg border bg-card px-2 text-xs outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Check-out
+                </label>
+                <input
+                  type="date"
+                  value={dates?.checkout || ""}
+                  onChange={(e) =>
+                    onDatesChange(
+                      e.target.value
+                        ? {
+                            checkin: dates?.checkin || "",
+                            checkout: e.target.value,
+                          }
+                        : null
+                    )
+                  }
+                  className="h-7 rounded-lg border bg-card px-2 text-xs outline-none"
+                />
+              </div>
+              {/* Currency */}
+              <div>
+                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Currency
+                </label>
+                <select
+                  value={currency}
+                  onChange={(e) => onCurrencyChange(e.target.value)}
+                  className="h-7 rounded-lg border bg-card px-2 text-xs outline-none"
+                >
+                  {CURRENCIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {dates && (
+                <button
+                  type="button"
+                  onClick={() => onDatesChange(null)}
+                  className="mb-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+                >
+                  Clear dates
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -3161,6 +3376,9 @@ export default function Home() {
   const [pinned, setPinned] = useState<Hotel[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [currency, setCurrency] = useState("USD");
+  const [occupancy, setOccupancy] = useState<Occupancy>({ adults: 2, children: [] });
+  const [dates, setDates] = useState<{ checkin: string; checkout: string } | null>(null);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<"research" | "booking">("booking");
@@ -3178,6 +3396,9 @@ export default function Home() {
     setCart(loadLS<CartItem[]>(LS_CART, []));
     setPinned(loadLS<Hotel[]>(LS_PINNED, []));
     setProfile(loadLS<UserProfile | null>(LS_PROFILE, null));
+    setCurrency(loadLS<string>(LS_CURRENCY, "USD"));
+    setOccupancy(loadLS<Occupancy>(LS_OCCUPANCY, { adults: 2, children: [] }));
+    setDates(loadLS<{ checkin: string; checkout: string } | null>(LS_DATES, null));
   }, []);
 
   useEffect(() => {
@@ -3195,6 +3416,15 @@ export default function Home() {
   useEffect(() => {
     saveLS(LS_PROFILE, profile);
   }, [profile]);
+  useEffect(() => {
+    saveLS(LS_CURRENCY, currency);
+  }, [currency]);
+  useEffect(() => {
+    saveLS(LS_OCCUPANCY, occupancy);
+  }, [occupancy]);
+  useEffect(() => {
+    saveLS(LS_DATES, dates);
+  }, [dates]);
 
   const pinnedIds = useMemo(
     () => new Set(pinned.map((h) => h.id)),
@@ -3590,6 +3820,12 @@ export default function Home() {
               onToggleMode={() =>
                 setMode((m) => (m === "research" ? "booking" : "research"))
               }
+              currency={currency}
+              onCurrencyChange={setCurrency}
+              occupancy={occupancy}
+              onOccupancyChange={setOccupancy}
+              dates={dates}
+              onDatesChange={setDates}
               placeholder={
                 mode === "research"
                   ? "Ask about destinations, weather, budget, safety…"
@@ -3675,6 +3911,12 @@ export default function Home() {
                       m === "research" ? "booking" : "research"
                     )
                   }
+                  currency={currency}
+                  onCurrencyChange={setCurrency}
+                  occupancy={occupancy}
+                  onOccupancyChange={setOccupancy}
+                  dates={dates}
+                  onDatesChange={setDates}
                 />
               </div>
             </form>
