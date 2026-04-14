@@ -1795,93 +1795,99 @@ function HotelDetailModal({
 
           {/* Booking options bar */}
           <section className="mt-10 animate-fade-in-up">
-            <div className="mb-4 flex flex-wrap items-end gap-3 rounded-2xl border bg-card p-4">
-              <div>
-                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Check-in
-                </label>
-                <input
-                  type="date"
-                  value={modalDates?.checkin || ""}
-                  onChange={(e) =>
-                    setModalDates((d) => ({
-                      checkin: e.target.value,
-                      checkout: d?.checkout || "",
-                    }))
-                  }
-                  className="h-8 rounded-lg border bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-ring"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Check-out
-                </label>
-                <input
-                  type="date"
-                  value={modalDates?.checkout || ""}
-                  onChange={(e) =>
-                    setModalDates((d) => ({
-                      checkin: d?.checkin || "",
-                      checkout: e.target.value,
-                    }))
-                  }
-                  className="h-8 rounded-lg border bg-background px-2.5 text-xs outline-none focus:ring-1 focus:ring-ring"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Guests
-                </label>
-                <div className="flex h-8 items-center gap-1.5 rounded-lg border bg-background px-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setModalOcc((o) => ({
-                        ...o,
-                        adults: Math.max(1, o.adults - 1),
-                      }))
-                    }
-                    className="text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    −
-                  </button>
-                  <span className="min-w-[4ch] text-center text-xs tabular-nums">
-                    {modalOcc.adults} adult{modalOcc.adults !== 1 ? "s" : ""}
+            <div className="mb-4 overflow-hidden rounded-2xl border bg-card">
+              <div className="grid grid-cols-2 divide-x sm:grid-cols-4">
+                {/* Check-in */}
+                <label className="group relative flex cursor-pointer flex-col px-4 py-3 transition hover:bg-muted/50">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Check-in
                   </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setModalOcc((o) => ({
-                        ...o,
-                        adults: Math.min(9, o.adults + 1),
+                  <input
+                    type="date"
+                    value={modalDates?.checkin || ""}
+                    onChange={(e) =>
+                      setModalDates((d) => ({
+                        checkin: e.target.value,
+                        checkout: d?.checkout || "",
                       }))
                     }
-                    className="text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Currency
+                    className="mt-1 w-full border-0 bg-transparent p-0 text-sm font-semibold tabular-nums outline-none"
+                  />
                 </label>
-                <select
-                  value={modalCur}
-                  onChange={(e) => setModalCur(e.target.value)}
-                  className="h-8 rounded-lg border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
-                >
-                  {CURRENCIES.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
+                {/* Check-out */}
+                <label className="group relative flex cursor-pointer flex-col px-4 py-3 transition hover:bg-muted/50">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Check-out
+                  </span>
+                  <input
+                    type="date"
+                    value={modalDates?.checkout || ""}
+                    onChange={(e) =>
+                      setModalDates((d) => ({
+                        checkin: d?.checkin || "",
+                        checkout: e.target.value,
+                      }))
+                    }
+                    className="mt-1 w-full border-0 bg-transparent p-0 text-sm font-semibold tabular-nums outline-none"
+                  />
+                </label>
+                {/* Guests */}
+                <div className="flex flex-col px-4 py-3">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Guests
+                  </span>
+                  <div className="mt-1 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setModalOcc((o) => ({
+                          ...o,
+                          adults: Math.max(1, o.adults - 1),
+                        }))
+                      }
+                      className="flex h-6 w-6 items-center justify-center rounded-full border text-xs transition hover:bg-muted"
+                    >
+                      −
+                    </button>
+                    <span className="text-sm font-semibold tabular-nums">
+                      {modalOcc.adults}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setModalOcc((o) => ({
+                          ...o,
+                          adults: Math.min(9, o.adults + 1),
+                        }))
+                      }
+                      className="flex h-6 w-6 items-center justify-center rounded-full border text-xs transition hover:bg-muted"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+                {/* Currency */}
+                <label className="flex flex-col px-4 py-3">
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Currency
+                  </span>
+                  <select
+                    value={modalCur}
+                    onChange={(e) => setModalCur(e.target.value)}
+                    className="mt-1 border-0 bg-transparent p-0 text-sm font-semibold outline-none"
+                  >
+                    {CURRENCIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
               {loading && (
-                <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                <div className="flex items-center gap-2 border-t px-4 py-2 text-[11px] text-muted-foreground">
                   <Spinner /> Updating rates…
-                </span>
+                </div>
               )}
             </div>
           </section>
