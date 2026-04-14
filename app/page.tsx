@@ -2128,9 +2128,9 @@ function HotelDetailModal({
                               <span className="capitalize">{poi.type}</span>
                               {typeof poi.distance === "number" && (
                                 <span>
-                                  {poi.distance < 1000
-                                    ? `${poi.distance}m`
-                                    : `${(poi.distance / 1000).toFixed(1)}km`}
+                                  {poi.distance < 805
+                                    ? `${Math.round(poi.distance * 3.281)}ft`
+                                    : `${(poi.distance / 1609.34).toFixed(1)}mi`}
                                 </span>
                               )}
                             </div>
