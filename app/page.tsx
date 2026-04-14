@@ -136,7 +136,17 @@ type CartRoomItem = {
   currency: string;
   boardName?: string;
 };
-type CartItem = CartHotelItem | CartFlightItem | CartRoomItem;
+type CartActivityItem = {
+  kind: "activity";
+  id: string;
+  addedAt: number;
+  name: string;
+  type: string;
+  category: string;
+  distance?: number;
+  hotelName?: string;
+};
+type CartItem = CartHotelItem | CartFlightItem | CartRoomItem | CartActivityItem;
 
 type ApiMessage = { role: "user" | "assistant"; content: string };
 
@@ -1481,6 +1491,96 @@ type DetailPayload = {
   search: { checkin: string; checkout: string; adults: number; currency: string };
 };
 
+const POI_CATEGORIES = [
+  { key: "attraction" as const, label: "Attractions", icon: "📍", bg: "bg-blue-500/10" },
+  { key: "historic" as const, label: "Historic", icon: "🏛", bg: "bg-purple-500/10" },
+  { key: "dining" as const, label: "Dining", icon: "🍽", bg: "bg-orange-500/10" },
+  { key: "park" as const, label: "Parks", icon: "🌳", bg: "bg-green-500/10" },
+];
+
+function formatDistanceUS(m?: number) {
+  if (typeof m !== "number") return "";
+  return m < 805
+    ? `${Math.round(m * 3.281)}ft`
+    : `${(m / 1609.34).toFixed(1)}mi`;
+}
+
+function NearbyPOIs({
+  pois,
+  hotelName,
+  activityIds,
+  onAddActivity,
+}: {
+  pois: POI[];
+  hotelName: string;
+  activityIds: Set<string>;
+  onAddActivity: (poi: POI, hotelName?: string) => void;
+}) {
+  return (
+    <div className="mt-5 space-y-5 animate-fade-in-up">
+      {POI_CATEGORIES.map((cat) => {
+        const items = pois.filter((p) => p.category === cat.key);
+        if (items.length === 0) return null;
+        return (
+          <div key={cat.key}>
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <span>{cat.icon}</span> {cat.label}
+            </h3>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {items.map((poi, i) => {
+                const saved = activityIds.has(`activity::${poi.name}`);
+                return (
+                  <div
+                    key={i}
+                    className="animate-fade-in-up group flex items-center gap-3 rounded-2xl border bg-card p-3 transition hover:shadow-md"
+                    style={{ animationDelay: `${i * 40}ms` }}
+                  >
+                    <div
+                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-lg ${cat.bg}`}
+                    >
+                      {cat.icon}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">
+                        {poi.name}
+                      </div>
+                      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <span className="capitalize">{poi.type}</span>
+                        {typeof poi.distance === "number" && (
+                          <>
+                            <span>·</span>
+                            <span>{formatDistanceUS(poi.distance)}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onAddActivity(poi, hotelName)}
+                      disabled={saved}
+                      className="flex h-8 shrink-0 items-center gap-1 rounded-full border bg-background px-2.5 text-[11px] font-medium transition hover:bg-muted disabled:opacity-60"
+                    >
+                      {saved ? (
+                        <>
+                          <Check className="text-green-500" /> Added
+                        </>
+                      ) : (
+                        <>
+                          <Plus /> Trip
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function HotelDetailModal({
   hotel,
   onClose,
@@ -1491,6 +1591,8 @@ function HotelDetailModal({
   initialDates,
   initialOccupancy,
   initialCurrency,
+  onAddActivity,
+  activityIds,
 }: {
   hotel: Hotel | null;
   onClose: () => void;
@@ -1506,6 +1608,8 @@ function HotelDetailModal({
   initialDates: { checkin: string; checkout: string } | null;
   initialOccupancy: Occupancy;
   initialCurrency: string;
+  onAddActivity: (poi: POI, hotelName?: string) => void;
+  activityIds: Set<string>;
 }) {
   const [details, setDetails] = useState<DetailPayload | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2099,47 +2203,12 @@ function HotelDetailModal({
 
               {/* Nearby POIs */}
               {details?.pois && details.pois.length > 0 && (
-                <div className="mt-4 animate-fade-in-up">
-                  <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    Nearby
-                  </h3>
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {details.pois.map((poi, i) => {
-                      const icon =
-                        poi.category === "dining"
-                          ? "🍽"
-                          : poi.category === "park"
-                          ? "🌳"
-                          : poi.category === "historic"
-                          ? "🏛"
-                          : "📍";
-                      return (
-                        <div
-                          key={i}
-                          className="animate-fade-in-up flex items-center gap-2.5 rounded-xl border bg-card px-3 py-2.5"
-                          style={{ animationDelay: `${i * 30}ms` }}
-                        >
-                          <span className="text-base">{icon}</span>
-                          <div className="min-w-0 flex-1">
-                            <div className="truncate text-xs font-medium">
-                              {poi.name}
-                            </div>
-                            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                              <span className="capitalize">{poi.type}</span>
-                              {typeof poi.distance === "number" && (
-                                <span>
-                                  {poi.distance < 805
-                                    ? `${Math.round(poi.distance * 3.281)}ft`
-                                    : `${(poi.distance / 1609.34).toFixed(1)}mi`}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                <NearbyPOIs
+                  pois={details.pois}
+                  hotelName={h.name}
+                  activityIds={activityIds}
+                  onAddActivity={onAddActivity}
+                />
               )}
             </section>
           )}
@@ -2584,6 +2653,7 @@ function TripModal({
   const hotels = cart.filter((c) => c.kind === "hotel") as CartHotelItem[];
   const rooms = cart.filter((c) => c.kind === "room") as CartRoomItem[];
   const flights = cart.filter((c) => c.kind === "flight") as CartFlightItem[];
+  const activities = cart.filter((c) => c.kind === "activity") as CartActivityItem[];
   const total = [...rooms, ...flights].reduce((sum, c) => {
     if (c.kind === "room") return sum + c.price;
     if (c.kind === "flight" && typeof c.flight.price === "number")
@@ -2745,6 +2815,61 @@ function TripModal({
                       </button>
                     </div>
                   ))}
+                </div>
+              </section>
+            )}
+
+            {/* Activities section */}
+            {activities.length > 0 && (
+              <section className="mb-8 animate-fade-in-up">
+                <h2 className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  📍 Activities ({activities.length})
+                </h2>
+                <div className="space-y-2">
+                  {activities.map((item) => {
+                    const icon =
+                      item.category === "dining"
+                        ? "🍽"
+                        : item.category === "park"
+                        ? "🌳"
+                        : item.category === "historic"
+                        ? "🏛"
+                        : "📍";
+                    return (
+                      <div
+                        key={item.id}
+                        className="flex items-center gap-3 rounded-xl border bg-card p-3"
+                      >
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted text-lg">
+                          {icon}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-semibold">
+                            {item.name}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            <span className="capitalize">{item.type}</span>
+                            {item.hotelName && ` · Near ${item.hotelName}`}
+                            {typeof item.distance === "number" && (
+                              <span>
+                                {" · "}
+                                {item.distance < 805
+                                  ? `${Math.round(item.distance * 3.281)}ft`
+                                  : `${(item.distance / 1609.34).toFixed(1)}mi`}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onRemove(item.id)}
+                          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                        >
+                          <X />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             )}
@@ -3694,6 +3819,26 @@ export default function Home() {
           ]
     );
   }
+  function addActivityToCart(poi: POI, hotelName?: string) {
+    const id = `activity::${poi.name}`;
+    setCart((prev) =>
+      prev.some((c) => c.id === id)
+        ? prev
+        : [
+            {
+              kind: "activity" as const,
+              id,
+              addedAt: Date.now(),
+              name: poi.name,
+              type: poi.type,
+              category: poi.category,
+              distance: poi.distance,
+              hotelName,
+            },
+            ...prev,
+          ]
+    );
+  }
   function removeFromCart(id: string) {
     setCart((prev) => prev.filter((c) => c.id !== id));
   }
@@ -3940,6 +4085,8 @@ export default function Home() {
         initialDates={dates}
         initialOccupancy={occupancy}
         initialCurrency={currency}
+        onAddActivity={addActivityToCart}
+        activityIds={new Set(cart.filter((c) => c.kind === "activity").map((c) => c.id))}
       />
       <ProfileModal
         open={profileOpen}
