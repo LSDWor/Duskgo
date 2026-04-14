@@ -226,6 +226,31 @@ export async function GET(req: Request) {
         }),
       ]).then((r) => r[0]);
     }
+    // Fetch nearby POIs via Overpass API (free, no key).
+    let poisRes: PromiseSettledResult<any> = {
+      status: "rejected",
+      reason: new Error("No coordinates"),
+    };
+    if (typeof lat === "number" && typeof lng === "number") {
+      const radius = 1500; // 1.5km
+      const query = `[out:json][timeout:10];(
+        node["tourism"~"attraction|museum|viewpoint"](around:${radius},${lat},${lng});
+        node["amenity"~"restaurant|cafe|bar"](around:${radius},${lat},${lng});
+        node["leisure"~"park|garden"](around:${radius},${lat},${lng});
+        node["historic"](around:${radius},${lat},${lng});
+      );out body 30;`;
+      poisRes = await Promise.allSettled([
+        fetch("https://overpass-api.de/api/interpreter", {
+          method: "POST",
+          body: `data=${encodeURIComponent(query)}`,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        }).then(async (r) => {
+          if (!r.ok) throw new Error(`Overpass ${r.status}`);
+          return r.json();
+        }),
+      ]).then((r) => r[0]);
+    }
+
     const hotelRooms: any[] = Array.isArray(raw?.rooms) ? raw.rooms : [];
 
     // Amenities (with translated names)
@@ -335,11 +360,62 @@ export async function GET(req: Request) {
         .filter(Boolean) as WeatherDay[];
     }
 
+    // --- Nearby POIs ---
+    type POI = {
+      name: string;
+      type: string;
+      category: "attraction" | "dining" | "park" | "historic";
+      distance?: number;
+    };
+    let pois: POI[] = [];
+    if (poisRes.status === "fulfilled" && poisRes.value?.elements) {
+      const elements: any[] = poisRes.value.elements;
+      const seen = new Set<string>();
+      for (const el of elements) {
+        const name = el.tags?.name;
+        if (!name || seen.has(name)) continue;
+        seen.add(name);
+
+        let category: POI["category"] = "attraction";
+        const tags = el.tags || {};
+        if (tags.amenity === "restaurant" || tags.amenity === "cafe" || tags.amenity === "bar")
+          category = "dining";
+        else if (tags.leisure === "park" || tags.leisure === "garden")
+          category = "park";
+        else if (tags.historic) category = "historic";
+
+        const type =
+          tags.tourism ||
+          tags.amenity ||
+          tags.leisure ||
+          tags.historic ||
+          "place";
+
+        // Simple distance calc (haversine approximation)
+        let distance: number | undefined;
+        if (typeof el.lat === "number" && typeof el.lon === "number") {
+          const dLat = ((el.lat - lat) * Math.PI) / 180;
+          const dLon = ((el.lon - lng) * Math.PI) / 180;
+          const a =
+            Math.sin(dLat / 2) ** 2 +
+            Math.cos((lat * Math.PI) / 180) *
+              Math.cos((el.lat * Math.PI) / 180) *
+              Math.sin(dLon / 2) ** 2;
+          distance = Math.round(6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+        }
+
+        pois.push({ name, type, category, distance });
+      }
+      pois.sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity));
+      pois = pois.slice(0, 20);
+    }
+
     return NextResponse.json({
       hotel,
       rooms,
       ratesError,
       weather,
+      pois,
       search: { checkin, checkout, adults, currency },
     });
   } catch (err: any) {

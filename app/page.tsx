@@ -1465,11 +1465,19 @@ type WeatherDay = {
   units: string;
 };
 
+type POI = {
+  name: string;
+  type: string;
+  category: "attraction" | "dining" | "park" | "historic";
+  distance?: number;
+};
+
 type DetailPayload = {
   hotel: HotelDetailsFull;
   rooms: Room[];
   ratesError: string | null;
   weather: WeatherDay[];
+  pois: POI[];
   search: { checkin: string; checkout: string; adults: number; currency: string };
 };
 
@@ -2088,6 +2096,51 @@ function HotelDetailModal({
                   )}
                 </div>
               </div>
+
+              {/* Nearby POIs */}
+              {details?.pois && details.pois.length > 0 && (
+                <div className="mt-4 animate-fade-in-up">
+                  <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Nearby
+                  </h3>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {details.pois.map((poi, i) => {
+                      const icon =
+                        poi.category === "dining"
+                          ? "🍽"
+                          : poi.category === "park"
+                          ? "🌳"
+                          : poi.category === "historic"
+                          ? "🏛"
+                          : "📍";
+                      return (
+                        <div
+                          key={i}
+                          className="animate-fade-in-up flex items-center gap-2.5 rounded-xl border bg-card px-3 py-2.5"
+                          style={{ animationDelay: `${i * 30}ms` }}
+                        >
+                          <span className="text-base">{icon}</span>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-xs font-medium">
+                              {poi.name}
+                            </div>
+                            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                              <span className="capitalize">{poi.type}</span>
+                              {typeof poi.distance === "number" && (
+                                <span>
+                                  {poi.distance < 1000
+                                    ? `${poi.distance}m`
+                                    : `${(poi.distance / 1000).toFixed(1)}km`}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </section>
           )}
         </div>
